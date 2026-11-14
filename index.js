@@ -6,7 +6,7 @@ import { createPanel } from './ui/panel.js';
 import { ICON_MENU, ICON_FLOOR } from './ui/icons.js';
 
 // 自报家门:排查「更新了却在跑旧码」时,控制台比对版本号即知真伪。
-export const PARALLAX_VERSION = '0.1.0';
+export const PARALLAX_VERSION = '0.1.1';
 globalThis.__PARALLAX_VERSION = PARALLAX_VERSION;
 console.info(`[Parallax] v${PARALLAX_VERSION} 已加载`);
 
@@ -69,11 +69,13 @@ function renderedIds() {
     return [...document.querySelectorAll('#chat .mes[mesid]')].map(el => Number(el.getAttribute('mesid'))).filter(Number.isInteger);
 }
 
-/** 重画一楼:正文按 display_text ?? mes 重画(酒馆的规则),再刷新按钮状态。 */
+/** 重画一楼:正文按 display_text ?? mes 重画(酒馆的规则),再刷新按钮状态。返回是否真的动了页面(门闸据此决定要不要通知别的扩展)。 */
 function redraw(ctx, id) {
     const m = ctx.chat?.[id];
-    if (m && mesEl(id)) ctx.updateMessageBlock?.(id, m);
+    const drawn = !!(m && mesEl(id));
+    if (drawn) ctx.updateMessageBlock?.(id, m);
     updateButton(ctx, id);
+    return drawn;
 }
 
 // 只刷新进行态变了的楼:不遍历整本聊天
@@ -120,7 +122,7 @@ function refreshAllButtons() {
 }
 
 function main() {
-    gate.configure({ getCtx, redraw, renderedIds });
+    gate.configure({ getCtx, redraw, renderedIds, afterNotify: (id) => updateButton(getCtx(), id) });
     panel = createPanel({ getCtx, onChanged: refreshAllButtons });
     const ctx = getCtx();
     getSettings(ctx);

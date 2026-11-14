@@ -75,6 +75,7 @@ const eventTypes = {
 class MockEventEmitter {
     constructor() { this.l = new Map(); }
     on(e, fn) { (this.l.get(e) || this.l.set(e, []).get(e)).push(fn); }
+    removeListener(e, fn) { const a = this.l.get(e); if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); } }
     makeLast(e, fn) { const a = this.l.get(e) || []; this.l.set(e, a.filter(f => f !== fn).concat(fn)); }
     async emit(e, ...args) { for (const fn of [...(this.l.get(e) || [])]) await fn(...args); }
 }
@@ -237,7 +238,7 @@ T('H1 面板:菜单入口能打开,三页都能渲染', async () => {
     sh.querySelector('[data-page="glossary"]').click();
     check('H1.6 译名表页:两个文本框、说明句', sh.querySelectorAll('textarea[data-gloss]').length === 2 && sh.textContent.includes('表里有的照表翻译,表里没有的由模型自己判断。'));
     sh.querySelector('[data-page="settings"]').click();
-    check('H1.7 设置页:译法提示词默认填好、版本号', sh.querySelector('textarea[data-set="prompt"]')?.value.startsWith('你是一位文学译者。') && sh.textContent.includes('Parallax 0.1.0'));
+    check('H1.7 设置页:译法提示词默认填好、版本号', sh.querySelector('textarea[data-set="prompt"]')?.value.startsWith('你是一位文学译者。') && sh.textContent.includes('Parallax 0.1.1'));
     check('H1.8 面板里没有 emoji', !/\p{Extended_Pictographic}/u.test(sh.textContent));
     sh.querySelector('[data-page="home"]').click();
     p.close();
@@ -332,6 +333,35 @@ T('H4 swipe:新 swipe 不吃旧译文,切回旧 swipe 不调模型', async () =>
     await swipeTo(id, 1);
     eq('H4.9 display_text 丢了也能从 segs 重建,不调模型', fx.calls.length, n);
     check('H4.10 重建出的是新 swipe 的译文', world.chat[id].extra.display_text?.includes('風') && shownText(id) === world.chat[id].extra.display_text);
+});
+
+T('H9 重画后通知别的扩展(MESSAGE_UPDATED),且不转圈', async () => {
+    await resetWorld();
+    const seen = [];
+    const spy = (id) => { seen.push(Number(id)); };
+    eventSource.on(eventTypes.MESSAGE_UPDATED, spy);
+    const id = await generate(SAMPLE);
+    await tick(30);
+    check('H9.1 翻译写回后发了 MESSAGE_UPDATED', seen.includes(id), JSON.stringify(seen));
+    check('H9.2 没有转圈(通知次数有限)', seen.length <= 3, String(seen.length));
+    eq('H9.3 自己的通知不触发新的请求', fx.calls.length, 1);
+    check('H9.4 通知之后显示的仍是译文', shownText(id) === world.chat[id].extra.display_text);
+    eventSource.removeListener?.(eventTypes.MESSAGE_UPDATED, spy);
+
+    // 模拟酒馆自带翻译扩展:在 MESSAGE_UPDATED 上见到 display_text 就删掉并用原文重画
+    await resetWorld();
+    let wiped = 0;
+    const builtin = (mid) => {
+        const mm = world.chat[mid];
+        if (mm?.extra?.display_text) { delete mm.extra.display_text; wiped++; drawFloor(mid); }
+    };
+    eventSource.on(eventTypes.MESSAGE_UPDATED, builtin);
+    const id2 = await generate(SAMPLE);
+    await tick(120);
+    eq('H9.5 自带翻译扩展没有机会清掉译文', wiped, 0);
+    check('H9.6 通知结束后 display_text 仍在', typeof world.chat[id2].extra.display_text === 'string' && world.chat[id2].extra.display_text !== SAMPLE);
+    check('H9.7 页面上显示的仍是译文', shownText(id2) === world.chat[id2].extra.display_text);
+    eventSource.removeListener?.(eventTypes.MESSAGE_UPDATED, builtin);
 });
 
 T('H5 编辑一段:只补那一段', async () => {

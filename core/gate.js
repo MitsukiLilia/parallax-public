@@ -13,7 +13,8 @@ export const config = { saveDelay: 60 };
 
 const env = {
     getCtx: () => globalThis.SillyTavern.getContext(),
-    redraw: null,          // (ctx, mesId) => void:重画一楼(updateMessageBlock + 按钮状态)
+    redraw: null,          // (ctx, mesId) => boolean:重画一楼(updateMessageBlock + 按钮状态),返回是否真的动了页面
+    afterNotify: null,     // (mesId) => void:通知发完、display_text 放回之后(刷新按钮用)
     renderedIds: null,     // () => number[]:当前已渲染到页面上的楼号
     call: null,            // 测试用:替换模型调用 (ctx, system, user, settings) => Promise<string>
 };
@@ -47,8 +48,57 @@ export function scheduleSave() {
     saveTimer = setTimeout(() => { saveTimer = null; try { ctxNow().saveChat?.(); } catch (err) { console.warn('[Parallax] 保存失败', err); } }, config.saveDelay);
 }
 
+// 正在补发「这一楼刚被重画」通知的楼:mesId → Promise。期间 display_text 被临时拿开,见 notifyRedrawn。
+const notifying = new Map();
+const renotify = new Set();
+
 function redraw(ctx, mesId) {
-    try { env.redraw?.(ctx, mesId); } catch (err) { console.warn('[Parallax] 重画失败', err); }
+    let drawn = false;
+    try { drawn = !!env.redraw?.(ctx, mesId); } catch (err) { console.warn('[Parallax] 重画失败', err); }
+    if (drawn) notifyRedrawn(ctx, mesId);
+}
+
+/**
+ * 重画之后通知别的扩展「这一楼的正文刚被换过」(MESSAGE_UPDATED,酒馆在用户编辑完一楼之后发的也是它)。
+ * updateMessageBlock 会把正文区整个换掉,靠渲染事件在正文里生成界面的扩展(把代码块变成面板的那类)不知道要重做,
+ * 面板就会退回成一大段源码。
+ *
+ * 通知期间先把 display_text 从消息上拿开,发完再按记录放回:
+ * 酒馆自带的翻译扩展在这个事件上见到 display_text 就当成「自己的旧译文过期了」而删掉并用原文重画。
+ * 页面上已经画好的译文不受影响(别的扩展只扫现成的页面内容),拿开的只是数据上的这个字段。
+ * 这段时间里本模块一律把这楼当作「译文在显示」(见 isShown),自己的 MESSAGE_UPDATED 监听跳过它。
+ */
+function notifyRedrawn(ctx, mesId) {
+    const ev = (ctx.eventTypes ?? ctx.event_types)?.MESSAGE_UPDATED;
+    const m = ctx.chat?.[mesId];
+    if (!ev || !ctx.eventSource?.emit || !m) return;
+    if (notifying.has(mesId)) { renotify.add(mesId); return; } // 通知还没发完又重画了一次:发完再补一发
+    const had = m.extra?.display_text !== undefined;
+    if (had) delete m.extra.display_text;
+    const myEpoch = epoch;
+    const p = Promise.resolve()
+        .then(() => ctx.eventSource.emit(ev, mesId))
+        .catch(err => console.warn('[Parallax] 重画通知失败', err))
+        .finally(() => {
+            notifying.delete(mesId);
+            // 聊天没换、还是那条消息,才按记录放回(不重画、不再通知)
+            const now = ctxNow();
+            if (myEpoch === epoch && now.chat?.[mesId] === m && store.getRecord(m)) {
+                store.renderDisplay(m, presetTags(now));
+                scheduleSave();
+            }
+            try { env.afterNotify?.(mesId); } catch { /* 按钮刷新失败不要紧 */ }
+            if (renotify.delete(mesId) && myEpoch === epoch && now.chat?.[mesId] === m) notifyRedrawn(now, mesId);
+            if (!notifying.size) settle();
+        });
+    notifying.set(mesId, p);
+}
+
+/** 译文是否在显示:通知期间 display_text 被临时拿开,那段时间按记录算。 */
+function isShown(m, mesId) {
+    const rec = store.getRecord(m);
+    if (!rec || rec.off) return false;
+    return m.extra?.display_text !== undefined || notifying.has(mesId);
 }
 
 function note(mesId, msg) {
@@ -121,20 +171,23 @@ function pump() {
     if (running) return;
     const next = queue.shift();
     status.queued = queue.length;
-    if (!next) {
-        const w = idleWaiters; idleWaiters = [];
-        for (const fn of w) fn();
-        return;
-    }
+    if (!next) { settle(); return; }
     running = next;
     runTask(next)
         .catch(err => { console.warn('[Parallax] 任务异常', err); status.busy = null; status.last = { ts: Date.now(), mesId: next.mesId, kind: 'error', missing: 0, msg: String(err?.message || err) }; })
         .finally(() => { running = null; emitChange(); pump(); });
 }
 
-/** 等队列跑空(测试与面板用)。 */
+/** 队列跑空、通知也都发完了,才放行等待的人。 */
+function settle() {
+    if (running || queue.length || notifying.size) return;
+    const w = idleWaiters; idleWaiters = [];
+    for (const fn of w) fn();
+}
+
+/** 等队列跑空、重画通知发完(测试与面板用)。 */
 export function whenIdle() {
-    if (!running && !queue.length) return Promise.resolve();
+    if (!running && !queue.length && !notifying.size) return Promise.resolve();
     return new Promise(r => idleWaiters.push(r));
 }
 export const currentTask = () => running;
@@ -237,7 +290,7 @@ export function toggleFloor(ctx, mesId) {
     if (store.hasTranslation(m)) {
         store.reconcile(m, presetTags(ctx));
         const rec = store.getRecord(m);
-        const showing = !rec.off && m.extra?.display_text !== undefined;
+        const showing = isShown(m, mesId);
         if (showing) { store.setOff(m, true, presetTags(ctx)); redraw(ctx, mesId); scheduleSave(); return 'original'; }
         if (store.hasTranslation(m)) { store.setOff(m, false, presetTags(ctx)); redraw(ctx, mesId); scheduleSave(); return 'translated'; }
     }
@@ -253,7 +306,7 @@ export function floorState(ctx, mesId) {
     return {
         busy: !!busy,
         has: store.hasTranslation(m),
-        shown: !!rec && !rec.off && m.extra?.display_text !== undefined,
+        shown: isShown(m, mesId),
         missing: rec?.src === store.srcFingerprint(m.mes) ? rec.missing : (rec ? store.missingUnits(m, store.tagsFor(m, presetTags(ctx))).length : 0),
     };
 }
@@ -322,7 +375,7 @@ export function onMessageEdited(mesId) {
 export function onMessageUpdated(mesId) {
     const ctx = ctxNow();
     const id = Number(mesId);
-    if (!ctx.chat?.[id]) return;
+    if (!ctx.chat?.[id] || notifying.has(id)) return; // 自己补发的通知:不重画,不然会转圈
     refreshFloor(ctx, id, { force: true });
     maybeFill(ctx, id);
 }
@@ -352,7 +405,7 @@ export function rebuildRendered() {
     for (const id of ids) {
         const m = ctx.chat?.[id];
         const rec = m && store.getRecord(m);
-        if (!rec || rec.off || m.extra?.display_text !== undefined) continue;
+        if (!rec || rec.off || m.extra?.display_text !== undefined || notifying.has(id)) continue;
         if (refreshFloor(ctx, id)) n++;
     }
     return n;
