@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallax 测试台</title>
+<link rel="stylesheet" href="../style.css">
+<style>
+    :root { color-scheme: light dark; --bg: #F2F1EC; --side: #FFFFFF; --text: #222; --muted: #666; --line: #D8D8D2; --pass: #1F7A3E; --fail: #B3261E; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #17181B; --side: #202226; --text: #E6E6E6; --muted: #A0A0A0; --line: #3A3D42; --pass: #7FCB97; --fail: #F2958A; } }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { display: flex; min-height: 100vh; }
+    .side { width: 340px; flex-shrink: 0; padding: 16px; background: var(--side); border-right: 1px solid var(--line); overflow-y: auto; }
+    .main { flex: 1; padding: 16px; min-width: 0; }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    .note { font-size: 13px; color: var(--muted); margin: 0 0 14px; line-height: 1.5; }
+    fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; padding: 8px 12px; }
+    legend { font-size: 13px; font-weight: 600; padding: 0 4px; }
+    button { font-size: 14px; min-height: 36px; padding: 6px 10px; margin: 3px 4px 3px 0; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+    #results { font-size: 13px; background: var(--side); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; white-space: pre-wrap; line-height: 1.55; border: 1px solid var(--line); }
+    .pass { color: var(--pass); } .fail { color: var(--fail); font-weight: 600; }
+    #extensionsMenu { border: 1px dashed var(--line); border-radius: 8px; padding: 8px; min-height: 36px; }
+    #extensionsMenu .list-group-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; text-decoration: none; color: var(--text); font-size: 14px; cursor: pointer; }
+    #chat .mes { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--side); }
+    #chat .mes_buttons { display: flex; gap: 6px; justify-content: flex-end; }
+    #chat .mes_button { cursor: pointer; opacity: .6; }
+    #chat .mes_text { white-space: pre-wrap; font-size: 14px; }
+    .template_element { display: none; }
+    @media (max-width: 700px) { .wrap { display: block; } .side { width: auto; border-right: 0; } }
+    #fileWarn { display: none; padding: 20px; }
+</style>
+</head>
+<body>
+<div id="fileWarn">需要本地静态服务器:<code>cd parallax &amp;&amp; python3 -m http.server 8741 --bind 127.0.0.1</code>,再访问 /test/harness.html(加 <code>?auto=1</code> 自动跑断言)</div>
+<div id="message_template" class="template_element">
+    <div class="mes"><div class="mes_block"><div class="mes_buttons"><div class="mes_button extraMesButtonsHint">…</div><div class="mes_button mes_edit">编辑</div></div><div class="mes_text"></div></div></div>
+</div>
+<div class="wrap">
+    <div class="side">
+        <h1>Parallax 测试台</h1>
+        <p class="note">mock 一个最小酒馆环境(context、事件、保存计数、updateMessageBlock、假模型),跑真实的插件代码。仅供开发自查,不代表真机。</p>
+        <fieldset>
+            <legend>断言</legend>
+            <button id="btnAssert">运行全部断言</button>
+        </fieldset>
+        <fieldset>
+            <legend>演示</legend>
+            <button id="btnDemo">灌一楼样本并自动翻译</button>
+            <button id="btnOpen">打开 / 关闭面板</button>
+        </fieldset>
+        <fieldset>
+            <legend>魔杖菜单(扩展挂载点)</legend>
+            <div id="extensionsMenu"></div>
+        </fieldset>
+    </div>
+    <div class="main">
+        <div id="results">尚未运行断言。</div>
+        <div id="chat"></div>
+    </div>
+</div>
+
+<script type="module">
+if (location.protocol === 'file:') document.getElementById('fileWarn').style.display = 'block';
+
+const $ = (id) => document.getElementById(id);
+
+// ── mock 酒馆 ──
+const eventTypes = {
+    MESSAGE_EDITED: 'message_edited', MESSAGE_UPDATED: 'message_updated', MESSAGE_SWIPED: 'message_swiped',
+    MESSAGE_DELETED: 'message_deleted', CHAT_CHANGED: 'chat_id_changed', GENERATION_STARTED: 'generation_started',
+    GENERATION_ENDED: 'generation_ended', GENERATION_STOPPED: 'generation_stopped',
+    CHARACTER_MESSAGE_RENDERED: 'character_message_rendered', MORE_MESSAGES_LOADED: 'more_messages_loaded',
+    CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready',
+};
+class MockEventEmitter {
+    constructor() { this.l = new Map(); }
+    on(e, fn) { (this.l.get(e) || this.l.set(e, []).get(e)).push(fn); }
+    makeLast(e, fn) { const a = this.l.get(e) || []; this.l.set(e, a.filter(f => f !== fn).concat(fn)); }
+    async emit(e, ...args) { for (const fn of [...(this.l.get(e) || [])]) await fn(...args); }
+}
+const eventSource = new MockEventEmitter();
+const world = { chat: [], chatId: 'chat-A', preset: '测试预设', characterId: 0 };
+const counters = { saves: 0, blocks: 0 };
+const extensionSettings = {};
+const characters = [{ name: '角色甲', avatar: 'char-a.png' }];
+
+// 假模型:把假名换成「译」,保留编号与占位符;可设延迟、漏段、报错
+const KANA = /[ぁ-ゖァ-ヺ]/g;
+const fakeZh = (s) => s.replace(KANA, '译');
+const fx = { calls: [], delay: 0, drop: null, fail: null, gate: null };
+async function generateRaw({ prompt, systemPrompt }) {
+    fx.calls.push({ prompt, systemPrompt });
+    if (fx.gate) await fx.gate;
+    if (fx.delay) await new Promise(r => setTimeout(r, fx.delay));
+    if (fx.fail) throw fx.fail;
+    const items = [...prompt.matchAll(/\[\[(\d+)\]\]\n([\s\S]*?)(?=\n\[\[\d+\]\]\n|$)/g)].map(m => ({ n: +m[1], text: m[2] }));
+    return items.filter(it => !(fx.drop && fx.drop(it))).map(it => `[[${it.n}]]\n${fakeZh(it.text)}`).join('\n');
+}
+
+const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+function updateMessageBlock(id, m) {
+    counters.blocks++;
+    const el = document.querySelector(`#chat .mes[mesid="${id}"] .mes_text`);
+    if (el) el.innerHTML = esc(m?.extra?.display_text ?? m.mes); // 酒馆的规则:display_text ?? mes
+}
+
+// getContext 每次返回新对象(和真实酒馆一致)
+function makeCtx() {
+    return {
+        chat: world.chat, chatId: world.chatId, characterId: world.characterId, characters, groupId: null,
+        eventSource, eventTypes, extensionSettings,
+        getCurrentChatId: () => world.chatId,
+        getPresetManager: () => ({ getSelectedPresetName: () => world.preset }),
+        saveSettingsDebounced() {}, saveChat: async () => { counters.saves++; },
+        updateMessageBlock, generateRaw, ConnectionManagerRequestService: undefined,
+    };
+}
+window.SillyTavern = { getContext: makeCtx };
+
+// ── 楼层 DOM ──
+function drawFloor(id) {
+    const m = world.chat[id];
+    let el = document.querySelector(`#chat .mes[mesid="${id}"]`);
+    if (!el) {
+        el = document.querySelector('#message_template .mes').cloneNode(true);
+        $('chat').appendChild(el);
+    }
+    el.setAttribute('mesid', id);
+    el.setAttribute('is_user', String(!!m.is_user));
+    el.setAttribute('is_system', String(!!m.is_system));
+    el.querySelector('.mes_text').innerHTML = esc(m.extra?.display_text ?? m.mes);
+}
+function redrawChat() { $('chat').innerHTML = ''; world.chat.forEach((_, i) => drawFloor(i)); }
+const shownText = (id) => document.querySelector(`#chat .mes[mesid="${id}"] .mes_text`)?.textContent;
+const floorBtn = (id) => document.querySelector(`#chat .mes[mesid="${id}"] .parallax-mes-btn`);
+
+// ── 加载插件 ──
+const mod = await import('../index.js');
+const { gate, status } = mod.api;
+const segMod = await import('../core/segment.js');
+const storeMod = await import('../core/store.js');
+const settingsMod = await import('../core/settings.js');
+gate.config.saveDelay = 0;
+const S = (o) => Object.assign(settingsMod.getSettings(makeCtx()), o);
+
+// ── 样本(自编,中性内容) ──
+const BODY_P1 = '　雨が上がった。角色甲は窓を開けて、湿った空気を吸い込んだ。';
+const BODY_P2 = '「……もう行くの？」\n　背後から角色乙の声がした。';
+const BODY_P3 = '　彼は<ruby>某術語<rt>なにか</rt></ruby>を手に取り、静かに笑った。<!-- 注 -->';
+const SAMPLE = [
+    '<thinking>', '角色甲の気持ちを整理する。', '</thinking>',
+    `<content>\n${BODY_P1}\n\n${BODY_P2}\n\n<!-- 場面転換 -->\n\n${BODY_P3}\n\n***\n</content>`,
+    '<status>', '時刻：夕方', '場所：駅前', '</status>',
+].join('\n');
+const outside = (s) => [s.slice(0, s.indexOf('<content>') + 9), s.slice(s.indexOf('</content>'))];
+
+function pushFloor(m) {
+    const id = world.chat.length;
+    world.chat.push({ name: m.is_user ? '用户' : '角色甲', is_user: false, is_system: false, extra: {}, swipe_id: 0, swipes: [m.mes], swipe_info: [{ extra: {} }], ...m });
+    drawFloor(id);
+    return id;
+}
+async function generate(mes, { type = 'normal', stop = false } = {}) {
+    await eventSource.emit(eventTypes.GENERATION_STARTED, type, {}, false);
+    const id = pushFloor({ mes });
+    if (stop) await eventSource.emit(eventTypes.GENERATION_STOPPED);
+    await eventSource.emit(eventTypes.CHARACTER_MESSAGE_RENDERED, id, type);
+    await eventSource.emit(eventTypes.GENERATION_ENDED, world.chat.length);
+    await gate.whenIdle();
+    return id;
+}
+const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
+
+// 模拟酒馆的 swipe:先 syncMesToSwipe(extra 整个 structuredClone 进 swipe_info),再切
+function syncMesToSwipe(m) { m.swipes[m.swipe_id] = m.mes; m.swipe_info[m.swipe_id] = { ...(m.swipe_info[m.swipe_id] || {}), extra: structuredClone(m.extra) }; }
+function clearMessageData(m) { delete m.extra.display_text; }
+async function swipeToNew(id, newMes) {
+    const m = world.chat[id];
+    syncMesToSwipe(m);
+    m.swipe_id = m.swipes.length;           // 越界 = 正在生成新 swipe
+    clearMessageData(m);                    // 酒馆只删 display_text,不删我们的字段
+    await eventSource.emit(eventTypes.MESSAGE_SWIPED, id);
+    const callsAtSwipe = fx.calls.length;
+    await eventSource.emit(eventTypes.GENERATION_STARTED, 'swipe', {}, false);
+    m.mes = newMes;
+    m.swipes.push(newMes);
+    m.swipe_info.push({ extra: {} });
+    drawFloor(id);
+    await eventSource.emit(eventTypes.CHARACTER_MESSAGE_RENDERED, id, 'swipe');
+    await eventSource.emit(eventTypes.GENERATION_ENDED, world.chat.length);
+    await gate.whenIdle();
+    return callsAtSwipe;
+}
+async function swipeTo(id, k) {
+    const m = world.chat[id];
+    syncMesToSwipe(m);
+    m.swipe_id = k;
+    clearMessageData(m);
+    m.mes = m.swipes[k];
+    m.extra = structuredClone(m.swipe_info[k].extra || {});
+    drawFloor(id); // addOneMessage:按 display_text ?? mes 画
+    await eventSource.emit(eventTypes.MESSAGE_SWIPED, id);
+    await gate.whenIdle();
+}
+
+async function resetWorld(opts = {}) {
+    await gate.whenIdle();
+    world.chat = [];
+    world.chatId = 'chat-' + Math.random().toString(36).slice(2, 8);
+    world.preset = '测试预设';
+    delete extensionSettings.parallax;
+    S({ presets: { '测试预设': { tags: ['content'] } }, ...opts });
+    Object.assign(fx, { calls: [], delay: 0, drop: null, fail: null, gate: null });
+    counters.saves = 0; counters.blocks = 0;
+    $('chat').innerHTML = '';
+    await eventSource.emit(eventTypes.CHAT_CHANGED, world.chatId);
+}
+
+// ── 断言框架 ──
+let results = [];
+const check = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail: String(detail) });
+const eq = (name, a, b) => check(name, a === b, `实际 ${JSON.stringify(a)},期望 ${JSON.stringify(b)}`);
+const tests = [];
+const T = (name, fn) => tests.push({ name, fn });
+
+T('H1 面板:菜单入口能打开,三页都能渲染', async () => {
+    await resetWorld();
+    const item = document.getElementById('parallax-menu-item');
+    check('H1.1 魔杖菜单里有入口', !!item);
+    item.click();
+    const p = mod.api.panel;
+    check('H1.2 点击后面板打开', p.isOpen());
+    const sh = p.shadow;
+    check('H1.3 面板在 Shadow DOM 里', !!sh && !!sh.querySelector('.px-root'));
+    eq('H1.4 三个页签', sh.querySelectorAll('.px-tab').length, 3);
+    check('H1.5 首页有状态行与正文标签说明', sh.querySelector('[data-role="status"]')?.textContent === '空闲' && sh.textContent.includes('一个都不勾 = 整楼翻译'));
+    sh.querySelector('[data-page="glossary"]').click();
+    check('H1.6 译名表页:两个文本框、说明句', sh.querySelectorAll('textarea[data-gloss]').length === 2 && sh.textContent.includes('表里有的照表翻译,表里没有的由模型自己判断。'));
+    sh.querySelector('[data-page="settings"]').click();
+    check('H1.7 设置页:译法提示词默认填好、版本号', sh.querySelector('textarea[data-set="prompt"]')?.value.startsWith('你是一位文学译者。') && sh.textContent.includes('Parallax 0.1.0'));
+    check('H1.8 面板里没有 emoji', !/\p{Extended_Pictographic}/u.test(sh.textContent));
+    sh.querySelector('[data-page="home"]').click();
+    p.close();
+    check('H1.9 关闭', !p.isOpen());
+});
+
+T('H2 渲染事件 → 翻译 → display_text 写入', async () => {
+    await resetWorld();
+    const id = await generate(SAMPLE);
+    const m = world.chat[id];
+    eq('H2.1 只发 1 次请求', fx.calls.length, 1);
+    const req = fx.calls[0];
+    check('H2.2 模型看不到任何标签', !/<\/?[a-z]/i.test(req.prompt), req.prompt);
+    check('H2.3 区域外内容不送翻', !req.prompt.includes('時刻') && !req.prompt.includes('気持ち'));
+    check('H2.4 行内标签换成了占位符', req.prompt.includes('⟦1⟧') && req.systemPrompt.includes('⟦1⟧'));
+    eq('H2.5 消息本体保留原文', m.mes, SAMPLE);
+    const d = m.extra.display_text;
+    check('H2.6 display_text 已写入', typeof d === 'string' && d !== SAMPLE);
+    const [pre, post] = outside(SAMPLE);
+    check('H2.7 区域外逐字节不变', d.startsWith(pre) && d.endsWith(post));
+    check('H2.8 行内标签按原位装回', d.includes('<ruby>某術語<rt>译译译</rt></ruby>') && d.includes('<!-- 注 -->'));
+    check('H2.9 页面上显示的是译文', shownText(id) === d);
+    const rec = m.extra.parallax;
+    check('H2.10 记录形状', rec.v === 1 && rec.src === storeMod.srcFingerprint(SAMPLE) && rec.missing === 0 && Object.keys(rec.segs).length === 3 && rec.off === false);
+    await tick(5);
+    check('H2.11 保存了聊天', counters.saves >= 1);
+    check('H2.12 按钮进入「显示译文」态', floorBtn(id)?.classList.contains('parallax-on'));
+});
+
+T('H3 门闸:不该自动翻的都不翻,并留原因', async () => {
+    await resetWorld();
+    await generate(SAMPLE, { stop: true });
+    eq('H3.1 手动停止的生成不自动翻', fx.calls.length, 0);
+    check('H3.2 原因可见', /手动停止/.test(status.skip?.msg || ''), status.skip?.msg);
+    await eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    const g = pushFloor({ mes: SAMPLE });
+    await eventSource.emit(eventTypes.CHARACTER_MESSAGE_RENDERED, g, 'first_message');
+    await gate.whenIdle();
+    eq('H3.3 开场白不自动翻', fx.calls.length, 0);
+    await generate(SAMPLE, { type: 'quiet' });
+    eq('H3.4 quiet 生成不自动翻', fx.calls.length, 0);
+    await eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, true); // dryRun 不改变门闸状态
+    const u = pushFloor({ mes: '本文です。', is_user: true });
+    await eventSource.emit(eventTypes.CHARACTER_MESSAGE_RENDERED, u, 'normal');
+    await gate.whenIdle();
+    eq('H3.5 用户楼不自动翻', fx.calls.length, 0);
+    await generate('……');
+    eq('H3.6 只有省略号不自动翻', fx.calls.length, 0);
+    await generate('<status>状態だけ</status>\n本文が標識の外にある。');
+    eq('H3.7 没找到勾选的标签不翻', fx.calls.length, 0);
+    check('H3.8 原因是「没找到勾选的标签」', /没找到勾选的标签/.test(status.skip?.msg || ''), status.skip?.msg);
+    S({ auto: false });
+    await generate(SAMPLE);
+    eq('H3.9 自动翻译关闭时不翻', fx.calls.length, 0);
+    S({ auto: true });
+    const ok = await generate(SAMPLE);
+    eq('H3.10 正常生成照常翻', fx.calls.length, 1);
+    // 翻译请求在飞期间用户发起的生成:照常自动翻译,排在当前任务后面
+    let release;
+    fx.gate = new Promise(r => { release = r; });
+    world.chat[ok].mes = SAMPLE.replace(BODY_P1, '　追記の段落。');
+    gate.translateFloor(makeCtx(), ok);
+    await tick(5);
+    await eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    const during = pushFloor({ mes: SAMPLE.replace('夕方', '夜') });
+    await eventSource.emit(eventTypes.CHARACTER_MESSAGE_RENDERED, during, 'normal');
+    release(); fx.gate = null;
+    await gate.whenIdle();
+    check('H3.11 翻译请求期间开始的生成照常排队翻译', !!world.chat[during].extra.parallax && !gate.reasonFor(during), gate.reasonFor(during));
+});
+
+T('H4 swipe:新 swipe 不吃旧译文,切回旧 swipe 不调模型', async () => {
+    await resetWorld();
+    const id = await generate(SAMPLE);
+    const firstDisplay = world.chat[id].extra.display_text;
+    const SAMPLE2 = SAMPLE.replace(BODY_P1, '　風が強くなった。角色甲は窓を閉めた。');
+    const callsAtSwipe = await swipeToNew(id, SAMPLE2);
+    eq('H4.1 切到正在生成的新 swipe 时什么都不做', callsAtSwipe, 1);
+    const m = world.chat[id];
+    eq('H4.2 新 swipe 只翻变了的那一段(共 2 次请求)', fx.calls.length, 2);
+    check('H4.3 第二次请求只含新段落', fx.calls[1].prompt.includes('風が強く') && !fx.calls[1].prompt.includes('もう行く'), fx.calls[1].prompt);
+    const fps = new Set(segMod.segment(SAMPLE2, ['content']).units.map(u => u.fp));
+    check('H4.4 新 swipe 的 segs 里没有对不上的旧条目', Object.keys(m.extra.parallax.segs).every(fp => fps.has(fp)));
+    eq('H4.5 新 swipe 记录的原文指纹是新的', m.extra.parallax.src, storeMod.srcFingerprint(SAMPLE2));
+    const n = fx.calls.length;
+    await swipeTo(id, 0);
+    eq('H4.6 切回旧 swipe 不调模型', fx.calls.length, n);
+    eq('H4.7 切回后显示原来的译文', world.chat[id].extra.display_text, firstDisplay);
+    eq('H4.8 页面显示正确', shownText(id), firstDisplay);
+    // display_text 被别处清掉了:只要 segs 在就能不花钱重建
+    delete world.chat[id].swipe_info[1].extra.display_text;
+    await swipeTo(id, 1);
+    eq('H4.9 display_text 丢了也能从 segs 重建,不调模型', fx.calls.length, n);
+    check('H4.10 重建出的是新 swipe 的译文', world.chat[id].extra.display_text?.includes('風') && shownText(id) === world.chat[id].extra.display_text);
+});
+
+T('H5 编辑一段:只补那一段', async () => {
+    await resetWorld();
+    const id = await generate(SAMPLE);
+    const m = world.chat[id];
+    const segsBefore = { ...m.extra.parallax.segs };
+    m.mes = SAMPLE.replace(BODY_P2, '「……まだいるの？」\n　背後から角色乙の声がした。');
+    await eventSource.emit(eventTypes.MESSAGE_EDITED, id);
+    document.querySelector(`#chat .mes[mesid="${id}"] .mes_text`).innerHTML = esc(m.mes); // 酒馆编辑完成后先用原文画一次
+    const raw = shownText(id);
+    await eventSource.emit(eventTypes.MESSAGE_UPDATED, id);
+    await gate.whenIdle();
+    eq('H5.1 编辑后补译 1 次', fx.calls.length, 2);
+    const items = [...fx.calls[1].prompt.matchAll(/\[\[\d+\]\]/g)].length;
+    eq('H5.2 补译只送改了的那一段', items, 1);
+    check('H5.3 没改的段落译文仍在', Object.entries(segsBefore).filter(([fp]) => fp in m.extra.parallax.segs).length === 2);
+    eq('H5.4 编辑后缺段为 0', m.extra.parallax.missing, 0);
+    check('H5.5 页面重画成了新译文(不是酒馆画的原文)', raw !== shownText(id) && shownText(id) === m.extra.display_text && m.extra.display_text.includes('译译'));
+    const blocks = counters.blocks;
+    await eventSource.emit(eventTypes.MESSAGE_UPDATED, id);
+    await gate.whenIdle();
+    eq('H5.6 没有新段落时 UPDATED 不再发请求', fx.calls.length, 2);
+    check('H5.7 自己调用 updateMessageBlock 不造成循环', counters.blocks - blocks <= 1, counters.blocks - blocks);
+});
+
+T('H6 切聊天作废在途任务', async () => {
+    await resetWorld();
+    fx.delay = 40;
+    await eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    const id = pushFloor({ mes: SAMPLE });
+    await eventSource.emit(eventTypes.CHARACTER_MESSAGE_RENDERED, id, 'normal');
+    await tick(5);
+    check('H6.1 任务已在飞', status.busy?.mesId === id, JSON.stringify(status.busy));
+    const oldChat = world.chat;
+    world.chat = [{ name: '角色甲', is_user: false, is_system: false, mes: SAMPLE, extra: {}, swipe_id: 0, swipes: [SAMPLE], swipe_info: [{ extra: {} }] }];
+    world.chatId = 'chat-other';
+    redrawChat();
+    await eventSource.emit(eventTypes.CHAT_CHANGED, world.chatId);
+    await gate.whenIdle();
+    check('H6.2 旧聊天的楼没有被写回', !oldChat[id].extra.parallax && !oldChat[id].extra.display_text);
+    check('H6.3 新聊天同楼号的楼也没被写', !world.chat[0].extra.parallax && !world.chat[0].extra.display_text);
+    eq('H6.4 状态报告「已丢弃」', status.last?.kind, 'discarded');
+    // 切回一个已有译文、但 display_text 不在的聊天:已渲染的楼按 segs 重建
+    const back = structuredClone(oldChat);
+    storeMod.writeResults(back[id], ['content'], new Map(segMod.segment(SAMPLE, ['content']).units.map(u => [u.fp, '译文' + u.fp])));
+    delete back[id].extra.display_text;
+    const calls = fx.calls.length;
+    world.chat = back; world.chatId = 'chat-back'; redrawChat();
+    await eventSource.emit(eventTypes.CHAT_CHANGED, world.chatId);
+    await gate.whenIdle();
+    check('H6.5 打开聊天时重建了显示且不调模型', typeof back[id].extra.display_text === 'string' && fx.calls.length === calls && shownText(id) === back[id].extra.display_text);
+});
+
+T('H7 每楼按钮与部分成功', async () => {
+    await resetWorld({ auto: false });
+    const id = await generate(SAMPLE);
+    const b = floorBtn(id);
+    check('H7.1 AI 楼有按钮', !!b);
+    fx.drop = (it) => it.text.includes('もう行く'); // 这一段模型总是漏掉
+    b.click();
+    await gate.whenIdle();
+    const m = world.chat[id];
+    eq('H7.2 部分成功也落地:缺 1 段', m.extra.parallax.missing, 1);
+    check('H7.3 已翻成的段落照常显示,漏掉的保持原文', m.extra.display_text.includes('もう行く') && !m.extra.display_text.includes(BODY_P1.trim()));
+    eq('H7.4 状态:缺 1 段', status.last?.kind, 'partial');
+    mod.api.panel.open('home');
+    const sh = mod.api.panel.shadow;
+    check('H7.5 首页显示「缺 1 段」', sh.textContent.includes('缺 1 段'), sh.querySelector('[data-role="status"]')?.textContent);
+    fx.drop = null;
+    sh.querySelector('[data-action="fill-latest"]').click();
+    await gate.whenIdle();
+    eq('H7.6 「补译」只补缺的那一段', [...fx.calls.at(-1).prompt.matchAll(/\[\[\d+\]\]/g)].length, 1);
+    eq('H7.7 补完缺 0 段', m.extra.parallax.missing, 0);
+    mod.api.panel.close();
+    const calls = fx.calls.length;
+    floorBtn(id).click();
+    check('H7.8 点按钮切到原文:删 display_text、置 off', m.extra.display_text === undefined && m.extra.parallax.off === true && shownText(id) === SAMPLE);
+    floorBtn(id).click();
+    check('H7.9 再点切回译文,不调模型', typeof m.extra.display_text === 'string' && m.extra.parallax.off === false && fx.calls.length === calls);
+    const u = pushFloor({ mes: '本文です。', is_user: true });
+    check('H7.10 用户楼的按钮被隐藏', getComputedStyle(floorBtn(u)).display === 'none');
+    fx.fail = { error: { message: 'HTTP 401 Unauthorized' } };
+    const id2 = pushFloor({ mes: SAMPLE.replace('夕方', '朝') });
+    floorBtn(id2).click();
+    await gate.whenIdle();
+    check('H7.11 调用报错:不重试、报错误原文', status.last?.kind === 'error' && status.last.msg.includes('401') && fx.calls.length === calls + 1, JSON.stringify(status.last));
+});
+
+T('H8 正文标签:扫描、首次默认勾选、整楼翻译、清除', async () => {
+    await resetWorld();
+    world.preset = '另一个预设';
+    const id = await generate(SAMPLE);
+    // 假模型只换假名:「時刻：夕方」这种纯汉字行会原样返回、被判没翻成而补译,所以这里不数请求次数
+    check('H8.1 没配置标签 = 整楼翻译(第一次请求含思维链与正文)', fx.calls[0]?.prompt.includes('気持ち') && fx.calls[0].prompt.includes('雨が上がった'));
+    check('H8.2 整楼翻译时状态栏也被送翻', fx.calls[0].prompt.includes('時刻'));
+    const p = mod.api.panel;
+    p.open('home');
+    const sh = p.shadow;
+    sh.querySelector('[data-action="scan"]').click();
+    const tags = settingsMod.getSettings(makeCtx()).presets['另一个预设']?.tags;
+    check('H8.3 首次扫描默认勾上字数最多的标签', JSON.stringify(tags) === '["content"]', JSON.stringify(tags));
+    const boxes = [...sh.querySelectorAll('input[data-tag]')];
+    check('H8.4 列出全部成对标签并带预览', boxes.map(x => x.dataset.tag).join(',') === 'thinking,content,status' && sh.textContent.includes('雨が上がった'));
+    const st = sh.querySelector('input[data-tag="status"]');
+    st.checked = true; st.dispatchEvent(new Event('change', { bubbles: true }));
+    check('H8.5 勾选写进本预设的设置', JSON.stringify(settingsMod.getSettings(makeCtx()).presets['另一个预设'].tags) === '["content","status"]');
+    world.preset = '测试预设';
+    p.renderNow();
+    check('H8.6 换预设后显示那个预设已保存的勾选', [...sh.querySelectorAll('input[data-tag]')].map(x => `${x.dataset.tag}:${x.checked}`).join(',') === 'content:true');
+    p.goto('settings');
+    const clear = () => sh.querySelector('[data-action="clear-chat"]');
+    clear().click();
+    check('H8.7 清除要二次确认', !!world.chat[id].extra.parallax && clear().textContent.includes('再点一次'));
+    clear().click();
+    check('H8.8 清除后记录与 display_text 都没了,页面回到原文', !world.chat[id].extra.parallax && world.chat[id].extra.display_text === undefined && shownText(id) === SAMPLE);
+    p.close();
+});
+
+async function runAll() {
+    results = [];
+    const lines = [];
+    for (const t of tests) {
+        const n0 = results.length;
+        try { await t.fn(); } catch (e) { check(`${t.name} 未捕获异常`, false, e.stack || e); }
+        const slice = results.slice(n0);
+        lines.push(`${t.name}: ${slice.filter(r => r.ok).length}/${slice.length}`);
+    }
+    const failed = results.filter(r => !r.ok);
+    $('results').innerHTML = `<b id="summary">PARALLAX-HARNESS ${results.length - failed.length}/${results.length} 通过${failed.length ? ',失败 ' + failed.length : ',全绿'}</b>\n` +
+        lines.join('\n') + '\n\n' +
+        results.map(r => `<span class="${r.ok ? 'pass' : 'fail'}">${r.ok ? 'PASS' : 'FAIL'} ${esc(r.name)}${r.ok ? '' : ' — ' + esc(r.detail)}</span>`).join('\n');
+    document.body.dataset.done = '1';
+    return { total: results.length, passed: results.length - failed.length, failed: failed.map(r => `${r.name} — ${r.detail}`) };
+}
+window.runAll = runAll;
+
+$('btnAssert').addEventListener('click', runAll);
+$('btnOpen').addEventListener('click', () => mod.api.panel.toggle());
+$('btnDemo').addEventListener('click', async () => { await resetWorld(); await generate(SAMPLE); });
+const q = new URLSearchParams(location.search);
+if (q.has('auto')) runAll();
+else if (q.has('panel')) { await resetWorld(); await generate(SAMPLE); mod.api.panel.open(q.get('panel') || 'home'); }
+</script>
+</body>
+</html>
