@@ -1,4 +1,4 @@
-// 面板:Shadow DOM 隔离,手机优先(宽 ≤ 480 全屏,桌面居中浮窗)。三页:首页 / 译名表 / 设置。
+// 面板:Shadow DOM 隔离,手机优先(宽 ≤ 480 全屏,桌面居中浮窗)。三页:首页(含导出译文) / 译名表 / 设置。
 // 面板关着时不渲染、不订阅;状态变化通过 bus 订阅,开着才重绘(rAF 合并;正在输入时不重绘,免得打断)。
 
 import { getSettings, saveSettings, currentPresetName, presetTags, currentCharacter } from '../core/settings.js';
@@ -6,6 +6,7 @@ import { status, subscribe } from '../core/bus.js';
 import { fetchCustomApiModels } from '../core/llm.js';
 import { DEFAULT_PROMPT, effectivePrompt } from '../core/prompts.js';
 import { scanPairedTags } from '../core/segment.js';
+import { buildExport } from '../core/export.js';
 import * as gate from '../core/gate.js';
 import * as I from './icons.js';
 
@@ -90,6 +91,44 @@ export function createPanel({ getCtx, onChanged }) {
         </section>`;
     }
 
+    /** 导出哪些标签:本预设单独记;没记过 = 翻译勾选的全部。只保留仍在翻译勾选里的。 */
+    function exportTagsOf(c, s) {
+        const all = presetTags(c, s);
+        const saved = s.presets[currentPresetName(c)]?.exportTags;
+        if (!Array.isArray(saved)) return all;
+        const keep = new Set(saved.map(t => String(t).toLowerCase()));
+        return all.filter(t => keep.has(t.toLowerCase()));
+    }
+
+    function exportBlock(c, s) {
+        const all = presetTags(c, s);
+        const on = new Set(exportTagsOf(c, s).map(t => t.toLowerCase()));
+        const hasAi = (c.chat || []).some(m => m && !m.is_user);
+        return `<section class="px-card">
+            <h3 class="px-h3">导出译文</h3>
+            <p class="px-hint">把这个聊天里 AI 楼的译文存成一个 txt,每楼带「第 N 楼」小标题;你自己发的楼不收,没翻译的楼用原文并标出来。不调用模型。</p>
+            ${all.length > 1 ? `<p class="px-hint">导出哪些标签里的内容:</p><div class="px-tags">${all.map(t => `<label class="px-tag"><input type="checkbox" data-export-tag="${esc(t)}" ${on.has(t.toLowerCase()) ? 'checked' : ''}><span class="px-tag-main"><span class="px-tag-name">&lt;${esc(t)}&gt;</span></span></label>`).join('')}</div>` : ''}
+            <div class="px-btn-row">${btn('export-txt', I.ICON_DOWNLOAD, '导出为 txt', { disabled: !hasAi || (all.length > 1 && !on.size) })}</div>
+        </section>`;
+    }
+
+    function doExport(c, s) {
+        const ch = currentCharacter(c);
+        const name = ch?.name || String(c.getCurrentChatId?.() ?? '') || 'chat';
+        const res = buildExport(c.chat, { fallbackTags: presetTags(c, s), exportTags: exportTagsOf(c, s), title: name });
+        if (!res.floors) { toast('没有可导出的内容'); return; }
+        const d = new Date();
+        const p2 = (n) => String(n).padStart(2, '0');
+        const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
+        const file = `${name.replace(/[\\/:*?"<>|\s]+/g, '_')}_译文_${stamp}.txt`;
+        const url = URL.createObjectURL(new Blob([res.text], { type: 'text/plain;charset=utf-8' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = file; a.style.display = 'none';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+        toast(`已导出 ${res.floors} 楼${res.untranslated ? `,其中 ${res.untranslated} 楼没翻完` : ''}`);
+    }
+
     function homePage(c, s) {
         const k = gate.latestAiFloor(c);
         const st = k >= 0 ? gate.floorState(c, k) : null;
@@ -111,7 +150,8 @@ export function createPanel({ getCtx, onChanged }) {
                 ${btn('toggle-latest', I.ICON_EYE, st?.has && !st.shown ? '显示译文' : '显示原文', { disabled: !st?.has })}
             </div>
         </section>
-        ${tagsBlock(c, s)}`;
+        ${tagsBlock(c, s)}
+        ${exportBlock(c, s)}`;
     }
 
     function glossaryPage(c, s) {
@@ -246,6 +286,7 @@ export function createPanel({ getCtx, onChanged }) {
                 }
                 render(); return;
             }
+            case 'export-txt': doExport(c, s); return;
             case 'set-capi': s.customApi.enabled = !s.customApi.enabled; saveSettings(c); render(); return;
             case 'fetch-models': {
                 ui.models = { loading: true, list: ui.models.list, error: '' }; render();
@@ -302,6 +343,16 @@ export function createPanel({ getCtx, onChanged }) {
             if (t.checked && k < 0) cur.push(t.dataset.tag);
             if (!t.checked && k >= 0) cur.splice(k, 1);
             setTags(c, s, cur);
+            render(); return;
+        }
+        if (t.dataset.exportTag) {
+            const cur = exportTagsOf(c, s);
+            const k = cur.findIndex(x => x.toLowerCase() === t.dataset.exportTag.toLowerCase());
+            if (t.checked && k < 0) cur.push(t.dataset.exportTag);
+            if (!t.checked && k >= 0) cur.splice(k, 1);
+            const name = currentPresetName(c);
+            s.presets[name] = { ...(s.presets[name] || {}), exportTags: cur };
+            saveSettings(c);
             render(); return;
         }
         if (t.dataset.capi) { s.customApi[t.dataset.capi] = t.value.trim(); saveSettings(c); return; }

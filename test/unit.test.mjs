@@ -452,3 +452,45 @@ test('扫描:列出成对标签、预览与字数,行内标签不列', () => {
     const max = list.reduce((a, b) => (b.chars > a.chars ? b : a));
     assert.equal(max.tag, 'content');
 });
+
+// ── 导出译文 ──
+
+import { stripMarkup, floorText, buildExport } from '../core/export.js';
+
+test('导出:去标签与注释,<br> 变换行,空行压成一个', () => {
+    assert.equal(stripMarkup('甲<!-- 注 -->乙<br>丙\n\n\n\n<b>丁</b>  '), '甲乙\n丙\n\n丁');
+});
+
+test('导出:只收 AI 楼,取指定标签,译文优先,没翻的标出来', () => {
+    const mk = (mes, extra = {}) => ({ mes, extra, is_user: false });
+    const body = '<think>考える</think>\n<content>\n一段目。\n\n二段目。\n</content>\n<status>\n状態。\n</status>';
+    const tags = ['content', 'status'];
+    const a = mk(body);
+    const units = missingUnits(a, tags);
+    writeResults(a, tags, new Map(units.map((u, i) => [u.fp, `译文${i + 1}`])));
+    const b = mk(body.replace('一段目', '別の一段目'));
+    const ub = missingUnits(b, tags);
+    writeResults(b, tags, new Map([[ub[0].fp, '只翻了这一段']]));
+    const c = mk(body.replace('一段目', '三楼的一段目'));
+    const hidden = { ...mk(body), is_system: true };
+    writeResults(hidden, tags, new Map(missingUnits(hidden, tags).map((u, i) => [u.fp, `隐藏楼译文${i + 1}`])));
+    const chat = [{ mes: 'ユーザーの入力', is_user: true }, a, { mes: 'again', is_user: true }, b, c, hidden];
+
+    assert.deepEqual(floorText(a, tags, ['content']), { text: '译文1\n\n译文2', state: 'full' });
+    assert.equal(floorText(a, tags, []).text, '译文1\n\n译文2\n\n译文3'); // 不指定 = 翻译用的那组
+    assert.equal(floorText(b, tags, ['content']).state, 'partial');
+    assert.equal(floorText(c, tags, ['content']).state, 'none');
+
+    const res = buildExport(chat, { fallbackTags: tags, exportTags: ['content'], title: '角色甲' });
+    assert.equal(res.floors, 4);
+    assert.equal(res.untranslated, 2);
+    assert.ok(res.text.startsWith('角色甲\n\n\n第 2 楼\n\n译文1\n\n译文2\n\n\n第 4 楼(部分未翻译)\n\n只翻了这一段\n\n二段目。'));
+    assert.ok(res.text.includes('第 5 楼(未翻译)\n\n三楼的一段目。'));
+    assert.ok(res.text.includes('第 6 楼\n\n隐藏楼译文1')); // 被隐藏的旧楼照收
+    assert.ok(!res.text.includes('ユーザー') && !res.text.includes('考える') && !res.text.includes('状態') && !res.text.includes('<'));
+});
+
+test('导出:没有标签的楼(开场白之类)整楼导出', () => {
+    const m = { mes: 'ようこそ。\n\n<b>始まり</b>だ。', extra: {}, is_user: false };
+    assert.deepEqual(floorText(m, ['content'], ['content']), { text: 'ようこそ。\n\n始まりだ。', state: 'none' });
+});

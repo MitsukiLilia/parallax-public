@@ -73,11 +73,12 @@ const eventTypes = {
     CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready',
 };
 class MockEventEmitter {
-    constructor() { this.l = new Map(); }
-    on(e, fn) { (this.l.get(e) || this.l.set(e, []).get(e)).push(fn); }
-    removeListener(e, fn) { const a = this.l.get(e); if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); } }
-    makeLast(e, fn) { const a = this.l.get(e) || []; this.l.set(e, a.filter(f => f !== fn).concat(fn)); }
-    async emit(e, ...args) { for (const fn of [...(this.l.get(e) || [])]) await fn(...args); }
+    // events 的形状跟酒馆的事件总线一样:{ <事件名>: [监听器…] }
+    constructor() { this.events = {}; }
+    on(e, fn) { (this.events[e] ||= []).push(fn); }
+    removeListener(e, fn) { const a = this.events[e]; if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); } }
+    makeLast(e, fn) { this.events[e] = (this.events[e] || []).filter(f => f !== fn).concat(fn); }
+    async emit(e, ...args) { for (const fn of [...(this.events[e] || [])]) await fn(...args); }
 }
 const eventSource = new MockEventEmitter();
 const world = { chat: [], chatId: 'chat-A', preset: '测试预设', characterId: 0 };
@@ -109,7 +110,7 @@ function updateMessageBlock(id, m) {
 function makeCtx() {
     return {
         chat: world.chat, chatId: world.chatId, characterId: world.characterId, characters, groupId: null,
-        eventSource, eventTypes, extensionSettings,
+        eventSource: world.eventSourceOverride || eventSource, eventTypes, extensionSettings,
         getCurrentChatId: () => world.chatId,
         getPresetManager: () => ({ getSelectedPresetName: () => world.preset }),
         saveSettingsDebounced() {}, saveChat: async () => { counters.saves++; },
@@ -235,10 +236,11 @@ T('H1 面板:菜单入口能打开,三页都能渲染', async () => {
     check('H1.3 面板在 Shadow DOM 里', !!sh && !!sh.querySelector('.px-root'));
     eq('H1.4 三个页签', sh.querySelectorAll('.px-tab').length, 3);
     check('H1.5 首页有状态行与正文标签说明', sh.querySelector('[data-role="status"]')?.textContent === '空闲' && sh.textContent.includes('一个都不勾 = 整楼翻译'));
+    check('H1.10 首页有导出译文', [...sh.querySelectorAll('.px-card')].some(c => c.textContent.includes('导出译文') && c.querySelector('[data-action="export-txt"]')));
     sh.querySelector('[data-page="glossary"]').click();
     check('H1.6 译名表页:两个文本框、说明句', sh.querySelectorAll('textarea[data-gloss]').length === 2 && sh.textContent.includes('表里有的照表翻译,表里没有的由模型自己判断。'));
     sh.querySelector('[data-page="settings"]').click();
-    check('H1.7 设置页:译法提示词默认填好、版本号', sh.querySelector('textarea[data-set="prompt"]')?.value.startsWith('你是一位文学译者。') && sh.textContent.includes('Parallax 0.1.1'));
+    check('H1.7 设置页:译法提示词默认填好、版本号', sh.querySelector('textarea[data-set="prompt"]')?.value.startsWith('你是一位文学译者。') && sh.textContent.includes(`Parallax ${mod.PARALLAX_VERSION}`));
     check('H1.8 面板里没有 emoji', !/\p{Extended_Pictographic}/u.test(sh.textContent));
     sh.querySelector('[data-page="home"]').click();
     p.close();
@@ -358,9 +360,32 @@ T('H9 重画后通知别的扩展(MESSAGE_UPDATED),且不转圈', async () => {
     eventSource.on(eventTypes.MESSAGE_UPDATED, builtin);
     const id2 = await generate(SAMPLE);
     await tick(120);
-    eq('H9.5 自带翻译扩展没有机会清掉译文', wiped, 0);
+    check('H9.5 自带翻译扩展清过译文(它照常运行)', wiped >= 1, String(wiped));
     check('H9.6 通知结束后 display_text 仍在', typeof world.chat[id2].extra.display_text === 'string' && world.chat[id2].extra.display_text !== SAMPLE);
     check('H9.7 页面上显示的仍是译文', shownText(id2) === world.chat[id2].extra.display_text);
+    check('H9.8 没有转圈', wiped <= 3, String(wiped));
+    eventSource.removeListener?.(eventTypes.MESSAGE_UPDATED, builtin);
+
+    // 模拟「收到通知就按消息数据把这一楼再画一遍」的扩展(异步,排在自带翻译扩展后面)
+    await resetWorld();
+    let redrawn = 0;
+    const rerender = async (mid) => { await tick(5); redrawn++; drawFloor(mid); };
+    eventSource.on(eventTypes.MESSAGE_UPDATED, builtin);
+    eventSource.on(eventTypes.MESSAGE_UPDATED, rerender);
+    const id3 = await generate(SAMPLE);
+    await tick(200);
+    check('H9.9 那个扩展重画过', redrawn >= 1, String(redrawn));
+    check('H9.10 它重画出来的是译文', shownText(id3) === world.chat[id3].extra.display_text && world.chat[id3].extra.display_text !== SAMPLE);
+    eventSource.removeListener?.(eventTypes.MESSAGE_UPDATED, rerender);
+
+    // 拿不到监听器列表(事件总线换了实现):退回整批发送,自带翻译扩展仍清不掉译文
+    await resetWorld();
+    const hidden = new Proxy(eventSource, { get: (t, k) => (k === 'events' ? undefined : (typeof t[k] === 'function' ? t[k].bind(t) : t[k])) });
+    world.eventSourceOverride = hidden;
+    const id4 = await generate(SAMPLE);
+    await tick(120);
+    world.eventSourceOverride = null;
+    check('H9.11 退路下通知结束后仍是译文', shownText(id4) === world.chat[id4].extra.display_text && typeof world.chat[id4].extra.display_text === 'string');
     eventSource.removeListener?.(eventTypes.MESSAGE_UPDATED, builtin);
 });
 

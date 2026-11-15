@@ -48,7 +48,7 @@ export function scheduleSave() {
     saveTimer = setTimeout(() => { saveTimer = null; try { ctxNow().saveChat?.(); } catch (err) { console.warn('[Parallax] 保存失败', err); } }, config.saveDelay);
 }
 
-// 正在补发「这一楼刚被重画」通知的楼:mesId → Promise。期间 display_text 被临时拿开,见 notifyRedrawn。
+// 正在补发「这一楼刚被重画」通知的楼:mesId → Promise。见 notifyRedrawn。
 const notifying = new Map();
 const renotify = new Set();
 
@@ -63,38 +63,65 @@ function redraw(ctx, mesId) {
  * updateMessageBlock 会把正文区整个换掉,靠渲染事件在正文里生成界面的扩展(把代码块变成面板的那类)不知道要重做,
  * 面板就会退回成一大段源码。
  *
- * 通知期间先把 display_text 从消息上拿开,发完再按记录放回:
- * 酒馆自带的翻译扩展在这个事件上见到 display_text 就当成「自己的旧译文过期了」而删掉并用原文重画。
- * 页面上已经画好的译文不受影响(别的扩展只扫现成的页面内容),拿开的只是数据上的这个字段。
- * 这段时间里本模块一律把这楼当作「译文在显示」(见 isShown),自己的 MESSAGE_UPDATED 监听跳过它。
+ * 通知期间 display_text 留在消息上:有的扩展收到通知会按消息数据把这一楼再画一遍,
+ * 那时候数据上没有译文,它画出来的就是原文(v0.1.1 把 display_text 临时拿开,撞的就是这个)。
+ * 反过来,酒馆自带的翻译扩展在这个事件上见到 display_text 就当成「自己的旧译文过期了」而删掉并用原文重画。
+ * 所以不整批发,而是按顺序一个一个叫监听器(见 dispatchUpdated):谁把 display_text 删了,当场按记录放回并重画,
+ * 排在它后面的扩展拿到的仍是译文。本模块自己的 MESSAGE_UPDATED 监听在通知期间跳过这一楼。
  */
 function notifyRedrawn(ctx, mesId) {
     const ev = (ctx.eventTypes ?? ctx.event_types)?.MESSAGE_UPDATED;
     const m = ctx.chat?.[mesId];
     if (!ev || !ctx.eventSource?.emit || !m) return;
     if (notifying.has(mesId)) { renotify.add(mesId); return; } // 通知还没发完又重画了一次:发完再补一发
-    const had = m.extra?.display_text !== undefined;
-    if (had) delete m.extra.display_text;
     const myEpoch = epoch;
+    const alive = () => myEpoch === epoch && ctxNow().chat?.[mesId] === m;
     const p = Promise.resolve()
-        .then(() => ctx.eventSource.emit(ev, mesId))
+        .then(() => dispatchUpdated(ctx, ev, mesId, m, alive))
         .catch(err => console.warn('[Parallax] 重画通知失败', err))
         .finally(() => {
             notifying.delete(mesId);
-            // 聊天没换、还是那条消息,才按记录放回(不重画、不再通知)
-            const now = ctxNow();
-            if (myEpoch === epoch && now.chat?.[mesId] === m && store.getRecord(m)) {
-                store.renderDisplay(m, presetTags(now));
-                scheduleSave();
-            }
+            // 聊天没换、还是那条消息:最后再按记录核对一次(不通知)
+            if (alive()) restoreIfWiped(m, mesId);
             try { env.afterNotify?.(mesId); } catch { /* 按钮刷新失败不要紧 */ }
-            if (renotify.delete(mesId) && myEpoch === epoch && now.chat?.[mesId] === m) notifyRedrawn(now, mesId);
+            if (renotify.delete(mesId) && alive()) notifyRedrawn(ctxNow(), mesId);
             if (!notifying.size) settle();
         });
     notifying.set(mesId, p);
 }
 
-/** 译文是否在显示:通知期间 display_text 被临时拿开,那段时间按记录算。 */
+/** 记录说该显示译文、消息上却没有 display_text(被别处删了):按记录放回并重画,不再通知。返回是否动了。 */
+function restoreIfWiped(m, mesId) {
+    const rec = store.getRecord(m);
+    if (!rec || rec.off || m.extra?.display_text !== undefined) return false;
+    const now = ctxNow();
+    if (!store.renderDisplay(m, presetTags(now)).shown) return false;
+    try { env.redraw?.(now, mesId); } catch (err) { console.warn('[Parallax] 重画失败', err); }
+    scheduleSave();
+    return true;
+}
+
+/**
+ * 按酒馆事件总线的规矩(顺序、逐个等待、单个出错不影响后面的)把 MESSAGE_UPDATED 发给每个监听器,
+ * 每叫完一个就核对一次 display_text。拿不到监听器列表时退回整批发送:那时只能把 display_text 临时拿开,
+ * 发完由 notifyRedrawn 的收尾放回。
+ */
+async function dispatchUpdated(ctx, ev, mesId, m, alive) {
+    const list = ctx.eventSource.events?.[ev];
+    if (!Array.isArray(list)) {
+        if (m.extra?.display_text !== undefined) delete m.extra.display_text;
+        await ctx.eventSource.emit(ev, mesId);
+        return;
+    }
+    for (const fn of list.slice()) {
+        if (typeof fn !== 'function') continue;
+        try { await fn.call(ctx.eventSource, mesId); } catch (err) { console.error('[Parallax] 别的扩展处理重画通知时出错', err); }
+        if (!alive()) return;
+        restoreIfWiped(m, mesId);
+    }
+}
+
+/** 译文是否在显示:通知期间 display_text 可能被别的扩展删掉、还没来得及放回,那段时间按记录算。 */
 function isShown(m, mesId) {
     const rec = store.getRecord(m);
     if (!rec || rec.off) return false;
