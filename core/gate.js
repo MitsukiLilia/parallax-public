@@ -5,6 +5,7 @@
 import { getSettings, presetTags, currentCharacter } from './settings.js';
 import { callLLM, llmOptsFrom } from './llm.js';
 import { mergeGlossary, translateUnits } from './translate.js';
+import { promptFor } from './prompts.js';
 import { segment } from './segment.js';
 import * as store from './store.js';
 import { status, emitChange, pushNotice } from './bus.js';
@@ -180,7 +181,7 @@ export function refreshFloor(ctx, mesId, { force = false } = {}) {
 
 const taskKey = (chatId, mesId, m) => `${chatId}|${mesId}|${m.swipe_id ?? 0}|${store.srcFingerprint(m.mes)}`;
 
-/** 入队一楼。mode: 'auto' | 'manual' | 'fill'。同键任务不重复入队。返回是否入队。 */
+/** 入队一楼。mode: 'auto' | 'manual' | 'fill' | 'bulk'(成批补翻)。同键任务不重复入队。返回是否入队。 */
 export function enqueue(ctx, mesId, mode = 'manual') {
     const m = ctx.chat?.[mesId];
     if (!m) return false;
@@ -220,7 +221,7 @@ export function whenIdle() {
 export const currentTask = () => running;
 
 function defaultCall(ctx, system, user, s) {
-    return callLLM(ctx, system, user, llmOptsFrom(s));
+    return callLLM(ctx, system, user, llmOptsFrom(s, ctx));
 }
 
 async function runTask(task) {
@@ -244,7 +245,7 @@ async function runTask(task) {
             status.last = { ts: Date.now(), mesId: task.mesId, kind: 'ok', missing: 0, msg: '这楼没有需要翻译的文字' };
             return;
         }
-        store.writeResults(m, tags, null, { keepOff: task.mode === 'fill' });
+        store.writeResults(m, tags, null, { keepOff: task.mode === 'fill' || task.mode === 'bulk' });
         store.renderDisplay(m, tags);
         redraw(ctx, task.mesId);
         scheduleSave();
@@ -257,7 +258,7 @@ async function runTask(task) {
     emitChange(); // 按钮的进行态由订阅 bus 的一方更新,不重画正文
     const call = (system, user) => selfCall(() => (env.call || defaultCall)(ctx, system, user, s));
     const res = await translateUnits(units, {
-        call, prompt: s.prompt, glossary, batchChars: s.batchChars,
+        call, prompt: promptFor(s.sourceLang), lang: s.sourceLang, glossary, batchChars: s.batchChars,
         onProgress: (p) => { status.busy = { mesId: task.mesId, batch: p.batch, batches: p.batches, retry: p.retry }; emitChange(); },
     });
     status.busy = null;
@@ -283,13 +284,18 @@ async function runTask(task) {
             return;
         }
     }
-    const rec = store.writeResults(m2, tags2, res.done, { keepOff: task.mode === 'fill' });
+    const rec = store.writeResults(m2, tags2, res.done, { keepOff: task.mode === 'fill' || task.mode === 'bulk' });
     store.renderDisplay(m2, tags2);
     redraw(ctx2, task.mesId);
     scheduleSave();
     const kind = res.error ? 'error' : (rec.missing ? 'partial' : 'ok');
     status.last = { ts: Date.now(), mesId: task.mesId, kind, missing: rec.missing, msg: res.error || '', requests: res.requests };
     if (res.error) pushNotice(`第 ${task.mesId + 1} 楼翻译失败:${res.error}`);
+    // 成批补翻时调用本身失败(网络、鉴权、额度):后面的多半也一样,别一楼一楼撞下去
+    if (res.error && task.mode === 'bulk') {
+        const dropped = cancelQueued('bulk');
+        if (dropped) pushNotice(`已停止补翻,剩下 ${dropped} 楼没翻`);
+    }
 }
 
 // ── 手动操作 ──
@@ -308,6 +314,35 @@ export function translateFloor(ctx, mesId) {
     if (!m) return false;
     if (store.getRecord(m)?.off) { store.setOff(m, false, presetTags(ctx)); redraw(ctx, mesId); scheduleSave(); }
     return enqueue(ctx, mesId, 'manual');
+}
+
+/** 这个聊天里还有没翻完的 AI 楼(用户楼不算;被隐藏的旧楼算——隐藏只是不发给模型)。返回楼号。 */
+export function untranslatedFloors(ctx) {
+    const out = [];
+    (ctx.chat || []).forEach((m, i) => {
+        if (!m || m.is_user || onlyEllipsis(m.mes)) return;
+        const tags = tagsForFloor(ctx, m);
+        if (segment(m.mes, tags).mode === 'none') return;
+        if (store.missingUnits(m, tags).length) out.push(i);
+    });
+    return out;
+}
+
+/** 把没翻完的楼全部排进队列(已有的译文不重翻,正在看原文的楼不替用户切回译文)。返回入队的楼数。 */
+export function translateAllMissing(ctx) {
+    if (!getSettings(ctx).enabled) { pushNotice('Parallax 已关闭'); return 0; }
+    let n = 0;
+    for (const i of untranslatedFloors(ctx)) if (enqueue(ctx, i, 'bulk')) n++;
+    return n;
+}
+
+/** 撤掉还在排队的任务(正在翻的那一楼照常翻完)。mode 给了就只撤这一类。返回撤掉的数量。 */
+export function cancelQueued(mode) {
+    const before = queue.length;
+    for (let i = queue.length - 1; i >= 0; i--) if (!mode || queue[i].mode === mode) queue.splice(i, 1);
+    status.queued = queue.length;
+    emitChange();
+    return before - queue.length;
 }
 
 /** 每楼按钮:译文在显示 → 看原文;有译文在看原文 → 切回译文;没有译文 → 翻译。 */

@@ -4,7 +4,7 @@
 import { getSettings, saveSettings, currentPresetName, presetTags, currentCharacter } from '../core/settings.js';
 import { status, subscribe } from '../core/bus.js';
 import { fetchCustomApiModels } from '../core/llm.js';
-import { DEFAULT_PROMPT, effectivePrompt } from '../core/prompts.js';
+import { SOURCE_LANGS } from '../core/prompts.js';
 import { scanPairedTags } from '../core/segment.js';
 import { buildExport } from '../core/export.js';
 import * as gate from '../core/gate.js';
@@ -25,7 +25,7 @@ const TABS = [
 export function createPanel({ getCtx, onChanged }) {
     let host = null, shadow = null, root = null, unsub = null, raf = 0;
     let page = 'home';
-    const ui = { scan: null, models: { loading: false, list: [], error: '' }, confirmClear: false, toast: '' };
+    const ui = { scan: null, models: { loading: false, list: [], error: '' }, confirmClear: false, confirmBulk: false, toast: '' };
     let glossTimer = 0;
 
     const ctx = () => getCtx();
@@ -104,18 +104,28 @@ export function createPanel({ getCtx, onChanged }) {
         const all = presetTags(c, s);
         const on = new Set(exportTagsOf(c, s).map(t => t.toLowerCase()));
         const hasAi = (c.chat || []).some(m => m && !m.is_user);
+        const left = hasAi ? gate.untranslatedFloors(c).length : 0;
+        const queued = status.queued;
         return `<section class="px-card">
             <h3 class="px-h3">导出译文</h3>
-            <p class="px-hint">把这个聊天里 AI 楼的译文存成一个 txt,每楼带「第 N 楼」小标题;你自己发的楼不收,没翻译的楼用原文并标出来。不调用模型。</p>
+            <p class="px-hint">把这个聊天里 AI 楼的译文存成一个 txt;你自己发的楼不收,没翻译的楼用原文并标出来。导出本身不调用模型。</p>
+            <div class="px-row"><span class="px-label">每楼加「第N章」小标题</span>${switchHtml('set-export-titles', s.exportTitles, '每楼加小标题')}</div>
+            <p class="px-hint">预设自己会写标题的话可以关掉。</p>
             ${all.length > 1 ? `<p class="px-hint">导出哪些标签里的内容:</p><div class="px-tags">${all.map(t => `<label class="px-tag"><input type="checkbox" data-export-tag="${esc(t)}" ${on.has(t.toLowerCase()) ? 'checked' : ''}><span class="px-tag-main"><span class="px-tag-name">&lt;${esc(t)}&gt;</span></span></label>`).join('')}</div>` : ''}
-            <div class="px-btn-row">${btn('export-txt', I.ICON_DOWNLOAD, '导出为 txt', { disabled: !hasAi || (all.length > 1 && !on.size) })}</div>
+            <p class="px-hint" data-role="bulk">${left ? `还有 ${left} 楼没翻完。` : (hasAi ? '所有 AI 楼都翻完了。' : '这个聊天里还没有 AI 楼。')}${queued ? `正在排队:${queued} 楼。` : ''}</p>
+            <div class="px-btn-row">
+                ${btn('bulk-translate', I.ICON_PLAY, ui.confirmBulk ? `再点一次:翻译这 ${left} 楼` : '翻译所有没翻的楼', { disabled: !left || !s.enabled || queued > 0 })}
+                ${queued ? btn('bulk-stop', I.ICON_CLOSE, '停止排队') : ''}
+                ${btn('export-txt', I.ICON_DOWNLOAD, '导出为 txt', { disabled: !hasAi || (all.length > 1 && !on.size), kind: 'primary' })}
+            </div>
+            <p class="px-hint">「翻译所有没翻的楼」每楼至少花一次模型调用,一楼一楼排队翻;已经翻过的段落不重翻。</p>
         </section>`;
     }
 
     function doExport(c, s) {
         const ch = currentCharacter(c);
         const name = ch?.name || String(c.getCurrentChatId?.() ?? '') || 'chat';
-        const res = buildExport(c.chat, { fallbackTags: presetTags(c, s), exportTags: exportTagsOf(c, s), title: name });
+        const res = buildExport(c.chat, { fallbackTags: presetTags(c, s), exportTags: exportTagsOf(c, s), title: name, titles: s.exportTitles });
         if (!res.floors) { toast('没有可导出的内容'); return; }
         const d = new Date();
         const p2 = (n) => String(n).padStart(2, '0');
@@ -127,6 +137,7 @@ export function createPanel({ getCtx, onChanged }) {
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 30000);
         toast(`已导出 ${res.floors} 楼${res.untranslated ? `,其中 ${res.untranslated} 楼没翻完` : ''}`);
+        return res;
     }
 
     function homePage(c, s) {
@@ -179,7 +190,14 @@ export function createPanel({ getCtx, onChanged }) {
         const ca = s.customApi;
         const models = ui.models;
         const opts = [['', '跟随酒馆当前连接'], ...profiles.map(p => [p.id, p.name])];
+        const modelOpts = models.list.includes(ca.model) || !ca.model ? models.list : [ca.model, ...models.list];
         return `<section class="px-card">
+            <h3 class="px-h3">翻译</h3>
+            <label class="px-field"><span class="px-label">原文语言</span>
+                <select class="px-input" data-set="sourceLang">${SOURCE_LANGS.map(l => `<option value="${esc(l.id)}" ${l.id === s.sourceLang ? 'selected' : ''}>${esc(l.label)}</option>`).join('')}</select>
+                <span class="px-hint">译成简体中文。译法是内置的,按原文语言自动选用。</span></label>
+        </section>
+        <section class="px-card">
             <h3 class="px-h3">模型连接</h3>
             <label class="px-field"><span class="px-label">连接配置</span>
                 <select class="px-input" data-set="profileId">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(s.profileId) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
@@ -188,22 +206,17 @@ export function createPanel({ getCtx, onChanged }) {
             <p class="px-hint">OpenAI 兼容端点;开启后优先于上面的连接配置。</p>
             <label class="px-field"><span class="px-label">地址</span><input class="px-input" type="text" data-capi="baseUrl" value="${esc(ca.baseUrl)}" placeholder="https://…/v1" spellcheck="false"></label>
             <label class="px-field"><span class="px-label">密钥</span><input class="px-input" type="password" data-capi="apiKey" value="${esc(ca.apiKey)}" autocomplete="off"></label>
-            <label class="px-field"><span class="px-label">模型</span><input class="px-input" type="text" data-capi="model" value="${esc(ca.model)}" placeholder="模型 id" spellcheck="false"></label>
+            <label class="px-field"><span class="px-label">模型</span>${models.list.length
+                ? `<select class="px-input" data-capi="model">${ca.model ? '' : '<option value="" selected>(请选择)</option>'}${modelOpts.map(m => `<option value="${esc(m)}" ${m === ca.model ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`
+                : `<input class="px-input" type="text" data-capi="model" value="${esc(ca.model)}" placeholder="模型 id,或点下面拉取列表后选" spellcheck="false">`}</label>
             <div class="px-btn-row">${btn('fetch-models', I.ICON_REFRESH, models.loading ? '拉取中……' : '拉取模型列表', { disabled: models.loading })}</div>
             ${models.error ? `<p class="px-hint px-err">${esc(models.error)}</p>` : ''}
-            ${models.list.length ? `<div class="px-models">${models.list.map(m => `<button class="px-model${m === ca.model ? ' on' : ''}" data-action="pick-model" data-model="${esc(m)}">${esc(m)}</button>`).join('')}</div>` : ''}
         </section>
         <section class="px-card">
             <h3 class="px-h3">分批</h3>
             <label class="px-field"><span class="px-label">每批原文字符数上限</span>
                 <input class="px-input" type="number" inputmode="numeric" min="200" max="100000" step="100" data-set="batchChars" value="${esc(s.batchChars)}">
-                <span class="px-hint">超过就在段落边界切成几批,依次发送。</span></label>
-        </section>
-        <section class="px-card">
-            <h3 class="px-h3">译法提示词</h3>
-            <textarea class="px-input px-area px-area-tall" data-set="prompt" rows="14" spellcheck="false">${esc(effectivePrompt(s.prompt))}</textarea>
-            <p class="px-hint">${s.prompt ? '正在使用自定义译法。' : '正在使用默认译法。'}格式约定、译名表和占位符说明由插件自动附在后面,不用写进这里。</p>
-            <div class="px-btn-row">${btn('reset-prompt', I.ICON_UNDO, '恢复默认', { disabled: !s.prompt })}</div>
+                <span class="px-hint">一楼的原文超过这个数,就在段落边界切成几批,每批一次模型调用。给模型留的输出长度跟着预设的「最大回复长度」走,不低于 50000。</span></label>
         </section>
         <section class="px-card">
             <h3 class="px-h3">数据</h3>
@@ -260,7 +273,7 @@ export function createPanel({ getCtx, onChanged }) {
         const s = getSettings(c);
         switch (action) {
             case 'close': close(); return;
-            case 'tab': page = el.dataset.page; ui.confirmClear = false; render(); return;
+            case 'tab': page = el.dataset.page; ui.confirmClear = false; ui.confirmBulk = false; render(); return;
             case 'set-enabled': s.enabled = !s.enabled; saveSettings(c); onChanged?.(); render(); return;
             case 'set-auto': s.auto = !s.auto; saveSettings(c); render(); return;
             case 'translate-latest': case 'fill-latest': {
@@ -287,6 +300,19 @@ export function createPanel({ getCtx, onChanged }) {
                 render(); return;
             }
             case 'export-txt': doExport(c, s); return;
+            case 'set-export-titles': s.exportTitles = !s.exportTitles; saveSettings(c); render(); return;
+            case 'bulk-translate': {
+                if (!ui.confirmBulk) {
+                    ui.confirmBulk = true; render();
+                    setTimeout(() => { if (ui.confirmBulk) { ui.confirmBulk = false; if (isOpen()) render(); } }, 4000);
+                    return;
+                }
+                ui.confirmBulk = false;
+                const n = gate.translateAllMissing(c);
+                toast(n ? `已排队 ${n} 楼` : '没有需要翻译的楼');
+                return;
+            }
+            case 'bulk-stop': { const n = gate.cancelQueued(); toast(n ? `已撤掉排队的 ${n} 楼,正在翻的那一楼会翻完` : '队列是空的'); return; }
             case 'set-capi': s.customApi.enabled = !s.customApi.enabled; saveSettings(c); render(); return;
             case 'fetch-models': {
                 ui.models = { loading: true, list: ui.models.list, error: '' }; render();
@@ -298,8 +324,6 @@ export function createPanel({ getCtx, onChanged }) {
                 }
                 render(); return;
             }
-            case 'pick-model': s.customApi.model = el.dataset.model; saveSettings(c); render(); return;
-            case 'reset-prompt': s.prompt = ''; saveSettings(c); toast('已恢复默认译法'); return;
             case 'clear-chat': {
                 if (!ui.confirmClear) {
                     ui.confirmClear = true; render();
@@ -359,17 +383,15 @@ export function createPanel({ getCtx, onChanged }) {
         const key = t.dataset.set;
         if (key === 'batchChars') {
             let v = Math.floor(Number(t.value));
-            if (!Number.isFinite(v)) v = 6000;
+            if (!Number.isFinite(v)) v = 20000;
             v = Math.min(100000, Math.max(200, v));
             s.batchChars = v; t.value = v;
-        } else if (key === 'prompt') {
-            // 与默认完全相同就存成空:默认译法以后更新时,没改过的用户自动跟上
-            s.prompt = t.value.trim() === DEFAULT_PROMPT.trim() ? '' : t.value;
+        } else if (key === 'sourceLang') {
+            s.sourceLang = t.value;
         } else if (key === 'profileId') {
             s.profileId = t.value;
         } else return;
         saveSettings(c);
-        if (key === 'prompt') render();
     }
 
     function onClick(e) {
@@ -418,7 +440,7 @@ export function createPanel({ getCtx, onChanged }) {
         host.style.display = 'none';
         unsub?.(); unsub = null;
         cancelAnimationFrame(raf); raf = 0;
-        ui.confirmClear = false;
+        ui.confirmClear = false; ui.confirmBulk = false;
     }
     function toggle() { isOpen() ? close() : open(); }
     function goto(p) { page = p; if (isOpen()) render(); }

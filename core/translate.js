@@ -8,6 +8,9 @@ export const MAX_REQUESTS = 8;
 // 假名(目标是简体中文,译文里出现就算没翻成)。不含长音符「ー」、中点「・」和浊点记号:中文译文里偶尔合法出现。
 const KANA_RE = /[ぁ-ゖゝ-ゟァ-ヺヽ-ヿㇰ-ㇿｦ-ｯｱ-ﾝ]/;
 export const hasKana = (s) => KANA_RE.test(String(s ?? ''));
+// 「译文里还留着原文的文字」的判据,按原文语言各一条。
+const RESIDUE = { ja: hasKana };
+const hasResidue = (lang, s) => (RESIDUE[lang] || RESIDUE.ja)(s);
 
 // ── 译名表 ──
 
@@ -92,9 +95,9 @@ function placeholderOk(src, out) {
 
 /**
  * 判定一段有没有翻成。返回 null = 翻成了(或短文本原样返回,接受为不用翻);否则返回原因。
- * 原因:missing 缺号 / empty 空 / placeholder 占位符对不上 / same 原样返回且原文较长 / kana 残留假名
+ * 原因:missing 缺号 / empty 空 / placeholder 占位符对不上 / same 原样返回且原文较长 / kana 残留原文文字(日语 = 假名)
  */
-export function judge(masked, text) {
+export function judge(masked, text, lang = 'ja') {
     if (text === undefined || text === null) return 'missing';
     const t = tidyTranslation(text);
     if (!t) return 'empty';
@@ -103,9 +106,9 @@ export function judge(masked, text) {
     if (t === src) {
         if ([...src].length > SHORT_LIMIT) return 'same';
         // 短文本原样返回 = 不用翻(符号、外文缩写、数字之类);但带假名的短句原样返回仍是没翻
-        return hasKana(t) ? 'kana' : null;
+        return hasResidue(lang, t) ? 'kana' : null;
     }
-    if (hasKana(t)) return 'kana';
+    if (hasResidue(lang, t)) return 'kana';
     return null;
 }
 
@@ -113,7 +116,7 @@ export function judge(masked, text) {
 
 /** 按原文字符数上限在段落边界切批;单段超长就自成一批。 */
 export function chunkUnits(units, limit) {
-    const cap = Math.max(1, Number(limit) || 6000);
+    const cap = Math.max(1, Number(limit) || 20000);
     const out = [];
     let cur = [], size = 0;
     for (const u of units) {
@@ -141,7 +144,7 @@ const errText = (err) => String(err?.message || err?.error?.message || err);
  * 返回 { done: Map<fp, 已还原的译文>, failed: Map<fp, 原因>, requests, error }
  * 规则:批内一次回来后只补没翻成的;一次请求毫无新增就把剩余对半拆开(只剩一段则再试一次后放弃);总请求数硬上限 maxRequests。
  */
-export async function translateUnits(units, { call, prompt = '', glossary = [], batchChars = 6000, maxRequests = MAX_REQUESTS, onProgress } = {}) {
+export async function translateUnits(units, { call, prompt = '', lang = 'ja', glossary = [], batchChars = 20000, maxRequests = MAX_REQUESTS, onProgress } = {}) {
     const all = dedupeUnits(units || []);
     const done = new Map();
     const failed = new Map();
@@ -156,7 +159,7 @@ export async function translateUnits(units, { call, prompt = '', glossary = [], 
         const parsed = parseReply(raw);
         const bad = [];
         list.forEach((u, i) => {
-            const why = judge(u.masked, parsed.get(i + 1));
+            const why = judge(u.masked, parsed.get(i + 1), lang);
             if (why) { failed.set(u.fp, why); bad.push(u); return; }
             failed.delete(u.fp);
             done.set(u.fp, unmask(tidyTranslation(parsed.get(i + 1)), u.tokens || []));

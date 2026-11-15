@@ -240,7 +240,7 @@ T('H1 面板:菜单入口能打开,三页都能渲染', async () => {
     sh.querySelector('[data-page="glossary"]').click();
     check('H1.6 译名表页:两个文本框、说明句', sh.querySelectorAll('textarea[data-gloss]').length === 2 && sh.textContent.includes('表里有的照表翻译,表里没有的由模型自己判断。'));
     sh.querySelector('[data-page="settings"]').click();
-    check('H1.7 设置页:译法提示词默认填好、版本号', sh.querySelector('textarea[data-set="prompt"]')?.value.startsWith('你是一位文学译者。') && sh.textContent.includes(`Parallax ${mod.PARALLAX_VERSION}`));
+    check('H1.7 设置页:原文语言下拉、不露译法提示词、版本号', sh.querySelector('select[data-set="sourceLang"]')?.value === 'ja' && !sh.querySelector('textarea[data-set="prompt"]') && sh.textContent.includes(`Parallax ${mod.PARALLAX_VERSION}`));
     check('H1.8 面板里没有 emoji', !/\p{Extended_Pictographic}/u.test(sh.textContent));
     sh.querySelector('[data-page="home"]').click();
     p.close();
@@ -503,6 +503,64 @@ T('H8 正文标签:扫描、首次默认勾选、整楼翻译、清除', async (
     check('H8.7 清除要二次确认', !!world.chat[id].extra.parallax && clear().textContent.includes('再点一次'));
     clear().click();
     check('H8.8 清除后记录与 display_text 都没了,页面回到原文', !world.chat[id].extra.parallax && world.chat[id].extra.display_text === undefined && shownText(id) === SAMPLE);
+    p.close();
+});
+
+T('H10 一键补翻与导出', async () => {
+    await resetWorld({ auto: false });
+    const vary = (k) => SAMPLE.replace('雨が上がった', `${k}日目、雨が上がった`);
+    pushFloor({ mes: 'ユーザーの入力', is_user: true });
+    const a = pushFloor({ mes: vary(1) });
+    pushFloor({ mes: 'つづけて', is_user: true });
+    const b = pushFloor({ mes: vary(2), is_system: true }); // 被隐藏的旧楼
+    const c = pushFloor({ mes: vary(3) });
+    const ctx = makeCtx();
+    eq('H10.1 三个 AI 楼都算没翻', gate.untranslatedFloors(ctx).join(','), [a, b, c].join(','));
+    eq('H10.2 全部入队', gate.translateAllMissing(ctx), 3);
+    await gate.whenIdle(); await tick(60);
+    check('H10.3 三楼都有译文(含被隐藏的楼)', [a, b, c].every(i => typeof world.chat[i].extra.display_text === 'string'));
+    eq('H10.4 一楼一次请求', fx.calls.length, 3);
+    eq('H10.5 翻完后没有剩的', gate.untranslatedFloors(ctx).length, 0);
+    eq('H10.6 再点一次不花钱', gate.translateAllMissing(ctx), 0);
+
+    // 调用本身失败:后面排队的不再一楼一楼撞
+    await resetWorld({ auto: false });
+    for (let k = 1; k <= 4; k++) pushFloor({ mes: vary(k) });
+    fx.fail = { error: { message: 'HTTP 401 Unauthorized' } };
+    gate.translateAllMissing(makeCtx());
+    await gate.whenIdle(); await tick(30);
+    eq('H10.7 第一楼失败后停止补翻', fx.calls.length, 1);
+    fx.fail = null;
+
+    // 排队中可以撤
+    await resetWorld({ auto: false });
+    for (let k = 1; k <= 4; k++) pushFloor({ mes: vary(k) });
+    fx.delay = 30;
+    gate.translateAllMissing(makeCtx());
+    eq('H10.8 撤掉排队的三楼', gate.cancelQueued(), 3);
+    await gate.whenIdle(); await tick(30);
+    eq('H10.9 正在翻的那一楼照常翻完', fx.calls.length, 1);
+
+    // 面板:导出卡片、小标题开关、导出内容
+    const p = mod.api.panel; p.open('home');
+    const sh = p.shadow;
+    const card = () => [...sh.querySelectorAll('.px-card')].find(x => x.textContent.includes('导出译文'));
+    check('H10.10 卡片写着还有 3 楼没翻完', card().querySelector('[data-role="bulk"]').textContent.includes('还有 3 楼没翻完'));
+    card().querySelector('[data-action="bulk-translate"]').click();
+    check('H10.11 第一次点只是确认', card().querySelector('[data-action="bulk-translate"]').textContent.includes('再点一次') && fx.calls.length === 1);
+    let blobText = null;
+    const origCreate = URL.createObjectURL;
+    URL.createObjectURL = (blob) => { blob.text().then(t => { blobText = t; }); return 'blob:test'; };
+    const origClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { if (!this.download) origClick.call(this); };
+    card().querySelector('[data-action="export-txt"]').click();
+    await tick(30);
+    check('H10.12 导出带章节小标题,不含标签和用户楼', /^角色甲\n\n\n第1章\n\n/.test(blobText || '') && blobText.includes('第2章(未翻译)') && !blobText.includes('<') && !blobText.includes('気持ち'), blobText);
+    card().querySelector('[data-action="set-export-titles"]').click();
+    card().querySelector('[data-action="export-txt"]').click();
+    await tick(30);
+    check('H10.13 关掉小标题后没有「第N章」', blobText && !/第\d+章/.test(blobText), blobText);
+    URL.createObjectURL = origCreate; HTMLAnchorElement.prototype.click = origClick;
     p.close();
 });
 

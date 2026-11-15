@@ -484,9 +484,11 @@ test('导出:只收 AI 楼,取指定标签,译文优先,没翻的标出来', () 
     const res = buildExport(chat, { fallbackTags: tags, exportTags: ['content'], title: '角色甲' });
     assert.equal(res.floors, 4);
     assert.equal(res.untranslated, 2);
-    assert.ok(res.text.startsWith('角色甲\n\n\n第 2 楼\n\n译文1\n\n译文2\n\n\n第 4 楼(部分未翻译)\n\n只翻了这一段\n\n二段目。'));
-    assert.ok(res.text.includes('第 5 楼(未翻译)\n\n三楼的一段目。'));
-    assert.ok(res.text.includes('第 6 楼\n\n隐藏楼译文1')); // 被隐藏的旧楼照收
+    assert.ok(res.text.startsWith('角色甲\n\n\n第1章\n\n译文1\n\n译文2\n\n\n第2章(部分未翻译)\n\n只翻了这一段\n\n二段目。'));
+    assert.ok(res.text.includes('第3章(未翻译)\n\n三楼的一段目。'));
+    assert.ok(res.text.includes('第4章\n\n隐藏楼译文1')); // 被隐藏的旧楼照收,章号按收进来的顺序
+    const bare = buildExport(chat, { fallbackTags: tags, exportTags: ['content'], titles: false });
+    assert.ok(bare.text.startsWith('译文1\n\n译文2\n\n\n只翻了这一段') && !/第\d+章/.test(bare.text)); // 关掉小标题
     assert.ok(!res.text.includes('ユーザー') && !res.text.includes('考える') && !res.text.includes('状態') && !res.text.includes('<'));
 });
 

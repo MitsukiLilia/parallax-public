@@ -1,13 +1,17 @@
 // 全局设置(extensionSettings.parallax)。读取时归一化:缺项补默认值,不整份深拷贝(保持酒馆持有的同一个对象)。
 
+import { normalizeLang } from './prompts.js';
+
 export const SETTINGS_KEY = 'parallax';
 
 export const DEFAULT_SETTINGS = {
     enabled: true,
     auto: true,
-    batchChars: 6000,
-    prompt: '',              // 空 = 用默认译法
-    presets: {},             // { <预设名>: { tags: [...] } }
+    v: 2,                    // 设置版本:升级时迁移旧默认值用
+    batchChars: 20000,
+    sourceLang: 'ja',        // 原文语言(译法内置,按语言取)
+    exportTitles: true,      // 导出时每楼加「第N章」小标题
+    presets: {},             // { <预设名>: { tags: [...], exportTags: [...] } }
     glossary: { common: '', chars: {} }, // chars: { <角色卡键>: '...' }
     profileId: '',
     customApi: { enabled: false, baseUrl: '', apiKey: '', model: '' },
@@ -19,6 +23,8 @@ export function getSettings(ctx) {
     const store = ctx.extensionSettings;
     let cur = store[SETTINGS_KEY];
     if (!isObj(cur)) cur = store[SETTINGS_KEY] = {};
+    // 0.1.2 之前的默认每批 6000:没改过的跟到新默认值
+    if (Object.keys(cur).length && cur.v === undefined) { if (Number(cur.batchChars) === 6000) delete cur.batchChars; cur.v = DEFAULT_SETTINGS.v; }
     for (const k of Object.keys(DEFAULT_SETTINGS)) {
         if (cur[k] === undefined) {
             const d = DEFAULT_SETTINGS[k];
@@ -35,6 +41,8 @@ export function getSettings(ctx) {
     }
     const n = Math.floor(Number(cur.batchChars));
     cur.batchChars = Number.isFinite(n) && n >= 200 ? n : DEFAULT_SETTINGS.batchChars;
+    cur.sourceLang = normalizeLang(cur.sourceLang);
+    cur.exportTitles = cur.exportTitles !== false;
     return cur;
 }
 

@@ -1,4 +1,4 @@
-// 默认译法提示词与请求格式。译法原文照任务书,不改写;格式约定、译名表节、占位符说明由代码拼在后面。
+// 内置译法提示词与请求格式。译法按原文语言各备一份,不开放给用户改;格式约定、译名表节、占位符说明由代码拼在后面。
 
 export const DEFAULT_PROMPT = `你是一位文学译者。把下面的小说正文译成简体中文。原文通常是日语。
 
@@ -12,6 +12,13 @@ export const DEFAULT_PROMPT = `你是一位文学译者。把下面的小说正�
 7. 吐息、拟声、拟态词不留假名、不生硬音译，换成自然的中文表达或对声音与感觉的描写。
 8. 译文里不留任何假名。引号、括号等标点的样式照原文保留。`;
 
+/** 支持的原文语言。加一种语言 = 这里加一项 + 下面加一份译法 + translate.js 里加一条「没翻成」的判据。 */
+export const SOURCE_LANGS = [{ id: 'ja', label: '日语' }];
+const PROMPTS = { ja: DEFAULT_PROMPT };
+export const normalizeLang = (lang) => (SOURCE_LANGS.some(l => l.id === lang) ? lang : SOURCE_LANGS[0].id);
+/** 这种原文语言的译法。 */
+export const promptFor = (lang) => PROMPTS[normalizeLang(lang)];
+
 export const GLOSSARY_HEAD = '译名表（表里有的必须照用，不得换成别的译法）';
 export const PLACEHOLDER_NOTE = '形如 ⟦1⟧ 的记号原样保留在译文中对应的位置，不翻译、不增删';
 
@@ -20,7 +27,7 @@ const FORMAT_RULES = `格式约定：
 - 按同样的 [[n]] 编号逐段交回译文：编号独占一行，下一行起是这一段的译文。
 - 一个编号对应一段，不合并、不拆分、不漏段，不加任何说明、注释或标题。`;
 
-/** 当前生效的译法:用户没改(空)就用默认。 */
+/** 生效的译法:没给(空)就用日语那份。 */
 export const effectivePrompt = (custom) => (String(custom ?? '').trim() ? String(custom).trim() : DEFAULT_PROMPT);
 
 /**

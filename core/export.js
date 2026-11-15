@@ -47,10 +47,11 @@ export function floorText(message, fallbackTags = [], exportTags = []) {
 const STATE_NOTE = { full: '', partial: '(部分未翻译)', none: '(未翻译)' };
 
 /**
- * 整个聊天的导出文本。只收 AI 楼(用户楼不收);被隐藏的旧楼照收——隐藏只是不发给模型,读的时候还是正文。
+ * 整个聊天的导出文本。titles:每楼前面加不加「第N章」小标题(预设自己会写标题的可以关掉)。
+ *只收 AI 楼(用户楼不收);被隐藏的旧楼照收——隐藏只是不发给模型,读的时候还是正文。
  * 返回 { text, floors, untranslated }:floors = 收进来的楼数,untranslated = 其中不是全译文的楼数。
  */
-export function buildExport(chat, { fallbackTags = [], exportTags = [], title = '' } = {}) {
+export function buildExport(chat, { fallbackTags = [], exportTags = [], title = '', titles = true } = {}) {
     const parts = [];
     let floors = 0, untranslated = 0;
     (chat || []).forEach((m, i) => {
@@ -59,7 +60,8 @@ export function buildExport(chat, { fallbackTags = [], exportTags = [], title = 
         if (!text) return;
         floors++;
         if (state !== 'full') untranslated++;
-        parts.push(`第 ${i + 1} 楼${STATE_NOTE[state]}\n\n${text}`);
+        // 小标题按收进来的顺序编号(第1章、第2章……),阅读器能认成目录;关掉就只留正文
+        parts.push(titles ? `第${floors}章${STATE_NOTE[state]}\n\n${text}` : text);
     });
     const head = title ? `${title}\n\n\n` : '';
     return { text: head + parts.join('\n\n\n') + (parts.length ? '\n' : ''), floors, untranslated };

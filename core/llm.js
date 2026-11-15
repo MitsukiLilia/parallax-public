@@ -2,7 +2,14 @@
 // 裸调用带防污染卫兵:发送前酒馆会广播 CHAT_COMPLETION_PROMPT_READY,别的扩展可能借它向所有请求
 // 注入自家指令。这里在该事件上挂最后一个监听,只认领本次请求的 system/user 两条消息,把外来消息剔掉。
 
-const RESPONSE_BUDGET = 16384;
+// 输出长度上限:跟着当前预设的「最大回复长度」走,但不低于这个数——一批译文可能很长,给少了会被截断。
+const RESPONSE_BUDGET = 50000;
+
+/** 本次调用给模型留的输出长度:预设设得更大就用预设的。 */
+export function responseBudget(ctx) {
+    const preset = Math.floor(Number(ctx?.chatCompletionSettings?.openai_max_tokens));
+    return Math.max(RESPONSE_BUDGET, Number.isFinite(preset) ? preset : 0);
+}
 
 /** 宽容 JSON 解析:剥代码围栏、剥前后杂文,失败返回 null。 */
 export function parseLenientJson(raw) {
@@ -154,6 +161,6 @@ export async function generateText(ctx, systemPrompt, userContent, opts) {
 }
 
 /** 从设置里取模型连接选项。 */
-export function llmOptsFrom(settings) {
-    return { profileId: settings.profileId || null, customApi: settings.customApi };
+export function llmOptsFrom(settings, ctx) {
+    return { profileId: settings.profileId || null, customApi: settings.customApi, responseLength: responseBudget(ctx) };
 }
