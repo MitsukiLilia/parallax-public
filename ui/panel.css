@@ -114,6 +114,19 @@
 .px-tag-name { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; color: var(--ink); }
 .px-tag-pre { font-size: 14px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 译名表:一条一条 */
+.px-gloss { list-style: none; margin: 4px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.px-gloss-row { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 4px 4px 4px 12px; border-radius: 10px; background: var(--bg); }
+.px-gloss-row > svg, .px-gloss-add > svg { width: 16px; height: 16px; color: var(--text2); }
+.px-gloss-src { flex: 1 1 0; min-width: 0; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.px-gloss-dst { flex: 1 1 0; min-width: 0; color: var(--accent); font-weight: 500; overflow-wrap: anywhere; }
+.px-gloss-del { flex: none; width: 38px; height: 38px; border: 0; border-radius: 50%; background: transparent; color: var(--text2); display: flex; align-items: center; justify-content: center; }
+.px-gloss-del svg { width: 16px; height: 16px; }
+.px-gloss-del:active { background: var(--accent-soft); color: var(--accent); }
+.px-gloss-add { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.px-gloss-add .px-input { flex: 1 1 0; min-width: 0; }
+.px-gloss-add .px-btn { flex: none; color: var(--accent); border-color: var(--accent); }
+
 /* 表单 */
 .px-field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
 .px-input {

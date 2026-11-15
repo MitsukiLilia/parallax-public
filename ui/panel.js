@@ -7,6 +7,7 @@ import { fetchCustomApiModels } from '../core/llm.js';
 import { SOURCE_LANGS } from '../core/prompts.js';
 import { scanPairedTags } from '../core/segment.js';
 import { buildExport } from '../core/export.js';
+import { parseGlossary, serializeGlossary } from '../core/translate.js';
 import * as gate from '../core/gate.js';
 import * as I from './icons.js';
 
@@ -26,7 +27,6 @@ export function createPanel({ getCtx, onChanged }) {
     let host = null, shadow = null, root = null, unsub = null, raf = 0;
     let page = 'home';
     const ui = { scan: null, models: { loading: false, list: [], error: '' }, confirmClear: false, confirmBulk: false, toast: '' };
-    let glossTimer = 0;
 
     const ctx = () => getCtx();
 
@@ -165,24 +165,55 @@ export function createPanel({ getCtx, onChanged }) {
         ${exportBlock(c, s)}`;
     }
 
+    // 译名表在设置里仍存成文本(每行「原文 = 译名」),界面上拆成一条一条。
+    const glossText = (c, s, kind) => (kind === 'common' ? s.glossary.common : (currentCharacter(c) ? (s.glossary.chars[currentCharacter(c).key] || '') : ''));
+    function setGloss(c, s, kind, entries) {
+        const text = serializeGlossary(entries);
+        if (kind === 'common') s.glossary.common = text;
+        else { const ch = currentCharacter(c); if (!ch) return; s.glossary.chars[ch.key] = text; }
+        saveSettings(c);
+    }
+
+    function glossTable(c, s, kind, enabled) {
+        const rows = parseGlossary(glossText(c, s, kind));
+        return `${rows.length ? `<ul class="px-gloss">${rows.map((g, i) => `<li class="px-gloss-row"><span class="px-gloss-src">${esc(g.src)}</span>${I.ICON_ARROW}<span class="px-gloss-dst">${esc(g.dst)}</span><button class="px-gloss-del" data-action="gloss-del" data-kind="${kind}" data-i="${i}" aria-label="删除 ${esc(g.src)}">${I.ICON_CLOSE}</button></li>`).join('')}</ul>` : (enabled ? '<p class="px-hint">还没有条目。</p>' : '')}
+            <div class="px-gloss-add">
+                <input class="px-input" type="text" data-gloss-src="${kind}" placeholder="原文" spellcheck="false" autocapitalize="off" ${enabled ? '' : 'disabled'}>
+                ${I.ICON_ARROW}
+                <input class="px-input" type="text" data-gloss-dst="${kind}" placeholder="译名" spellcheck="false" autocapitalize="off" ${enabled ? '' : 'disabled'}>
+                <button class="px-btn" data-action="gloss-add" data-kind="${kind}" ${enabled ? '' : 'disabled'}>追加</button>
+            </div>`;
+    }
+
     function glossaryPage(c, s) {
         const ch = currentCharacter(c);
-        const charText = ch ? (s.glossary.chars[ch.key] || '') : '';
-        const ph = '角色甲 = 译名甲\n某术语 → 某译名';
         return `<section class="px-card">
             <p class="px-hint">表里有的照表翻译,表里没有的由模型自己判断。</p>
-            <p class="px-hint">每行一条「原文 = 译名」,也认 → 、=> 和全角 ＝。每次只带上本批文字里出现过的条目。</p>
+            <p class="px-hint">片假名、平假名的人名最需要填,例如「カガミ → 镜」。每次只带上本批文字里出现过的条目。</p>
         </section>
         <section class="px-card">
             <h3 class="px-h3">通用</h3>
-            <textarea class="px-input px-area" data-gloss="common" rows="8" spellcheck="false" placeholder="${esc(ph)}">${esc(s.glossary.common)}</textarea>
+            ${glossTable(c, s, 'common', true)}
         </section>
         <section class="px-card">
             <h3 class="px-h3">当前角色卡${ch ? `:${esc(ch.name)}` : ''}</h3>
             ${ch ? '' : '<p class="px-hint">没有打开角色(或在群聊中),这一栏不可用。</p>'}
-            <textarea class="px-input px-area" data-gloss="char" rows="8" spellcheck="false" placeholder="${esc(ph)}" ${ch ? '' : 'disabled'}>${esc(charText)}</textarea>
+            ${glossTable(c, s, 'char', !!ch)}
             <p class="px-hint">同一原文两边都有时,以角色卡的为准。</p>
         </section>`;
+    }
+
+    function addGloss(c, s, kind) {
+        const srcEl = root.querySelector(`[data-gloss-src="${kind}"]`);
+        const dstEl = root.querySelector(`[data-gloss-dst="${kind}"]`);
+        const src = srcEl?.value.trim(), dst = dstEl?.value.trim();
+        if (!src || !dst) { (src ? dstEl : srcEl)?.focus(); toast('原文和译名都要填'); return; }
+        const rows = parseGlossary(glossText(c, s, kind));
+        const k = rows.findIndex(g => g.src === src);
+        if (k >= 0) rows[k].dst = dst; else rows.push({ src, dst }); // 同一原文再填一次 = 改译名
+        setGloss(c, s, kind, rows);
+        render();
+        root.querySelector(`[data-gloss-src="${kind}"]`)?.focus();
     }
 
     function settingsPage(c, s) {
@@ -299,6 +330,13 @@ export function createPanel({ getCtx, onChanged }) {
                 }
                 render(); return;
             }
+            case 'gloss-add': addGloss(c, s, el.dataset.kind); return;
+            case 'gloss-del': {
+                const rows = parseGlossary(glossText(c, s, el.dataset.kind));
+                rows.splice(Number(el.dataset.i), 1);
+                setGloss(c, s, el.dataset.kind, rows);
+                render(); return;
+            }
             case 'export-txt': doExport(c, s); return;
             case 'set-export-titles': s.exportTitles = !s.exportTitles; saveSettings(c); render(); return;
             case 'bulk-translate': {
@@ -338,29 +376,20 @@ export function createPanel({ getCtx, onChanged }) {
         }
     }
 
-    function storeGloss(t) {
-        const c = ctx();
-        const s = getSettings(c);
-        if (t.dataset.gloss === 'common') s.glossary.common = t.value;
-        else {
-            const ch = currentCharacter(c);
-            if (!ch) return;
-            s.glossary.chars[ch.key] = t.value;
-        }
-        clearTimeout(glossTimer);
-        glossTimer = setTimeout(() => saveSettings(c), 400);
-    }
-
-    function onInput(e) {
+    // 译名表的两个输入框里按回车 = 追加
+    function onKeydown(e) {
         const t = e.target;
-        if (t.dataset.gloss) storeGloss(t);
+        const kind = t?.dataset?.glossSrc || t?.dataset?.glossDst;
+        if (e.key !== 'Enter' || e.isComposing || !kind) return;
+        e.preventDefault();
+        const c = ctx();
+        addGloss(c, getSettings(c), kind);
     }
 
     function onChange(e) {
         const c = ctx();
         const s = getSettings(c);
         const t = e.target;
-        if (t.dataset.gloss) { storeGloss(t); saveSettings(c); return; }
         if (t.dataset.tag) {
             const cur = presetTags(c, s);
             const k = cur.findIndex(x => x.toLowerCase() === t.dataset.tag.toLowerCase());
@@ -425,7 +454,7 @@ export function createPanel({ getCtx, onChanged }) {
         shadow.appendChild(root);
         root.addEventListener('click', onClick);
         root.addEventListener('change', onChange);
-        root.addEventListener('input', onInput);
+        root.addEventListener('keydown', onKeydown);
     }
 
     function isOpen() { return !!host && host.style.display !== 'none'; }

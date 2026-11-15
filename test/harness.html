@@ -238,7 +238,28 @@ T('H1 面板:菜单入口能打开,三页都能渲染', async () => {
     check('H1.5 首页有状态行与正文标签说明', sh.querySelector('[data-role="status"]')?.textContent === '空闲' && sh.textContent.includes('一个都不勾 = 整楼翻译'));
     check('H1.10 首页有导出译文', [...sh.querySelectorAll('.px-card')].some(c => c.textContent.includes('导出译文') && c.querySelector('[data-action="export-txt"]')));
     sh.querySelector('[data-page="glossary"]').click();
-    check('H1.6 译名表页:两个文本框、说明句', sh.querySelectorAll('textarea[data-gloss]').length === 2 && sh.textContent.includes('表里有的照表翻译,表里没有的由模型自己判断。'));
+    check('H1.6 译名表页:两张表各一行输入、说明句', sh.querySelectorAll('[data-action="gloss-add"]').length === 2 && !sh.querySelector('textarea') && sh.textContent.includes('表里有的照表翻译,表里没有的由模型自己判断。'));
+    {
+        const st = makeCtx().extensionSettings.parallax;
+        st.glossary.common = '# 旧格式的注释\n角色甲 → 译名甲';
+        p.renderNow();
+        eq('H1.11 旧文本里的条目显示成一行', sh.querySelectorAll('.px-gloss-row').length, 1);
+        sh.querySelector('[data-gloss-src="common"]').value = 'カガミ';
+        sh.querySelector('[data-gloss-dst="common"]').value = '镜';
+        sh.querySelector('[data-action="gloss-add"][data-kind="common"]').click();
+        eq('H1.12 追加后存成两行', st.glossary.common, '角色甲 = 译名甲\nカガミ = 镜');
+        sh.querySelector('[data-gloss-src="common"]').value = 'カガミ';
+        sh.querySelector('[data-gloss-dst="common"]').value = '鏡';
+        sh.querySelector('[data-gloss-dst="common"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        eq('H1.13 同一原文再填一次是改译名(回车也能追加)', st.glossary.common, '角色甲 = 译名甲\nカガミ = 鏡');
+        sh.querySelector('[data-action="gloss-del"][data-i="0"]').click();
+        eq('H1.14 删除一条', st.glossary.common, 'カガミ = 鏡');
+        sh.querySelector('[data-gloss-src="char"]').value = '某術語';
+        sh.querySelector('[data-gloss-dst="char"]').value = '某术语';
+        sh.querySelector('[data-action="gloss-add"][data-kind="char"]').click();
+        eq('H1.15 角色卡表存在角色卡名下', st.glossary.chars['char-a.png'], '某術語 = 某术语');
+        st.glossary.common = ''; st.glossary.chars = {};
+    }
     sh.querySelector('[data-page="settings"]').click();
     check('H1.7 设置页:原文语言下拉、不露译法提示词、版本号', sh.querySelector('select[data-set="sourceLang"]')?.value === 'ja' && !sh.querySelector('textarea[data-set="prompt"]') && sh.textContent.includes(`Parallax ${mod.PARALLAX_VERSION}`));
     check('H1.8 面板里没有 emoji', !/\p{Extended_Pictographic}/u.test(sh.textContent));

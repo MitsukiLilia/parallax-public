@@ -31,6 +31,9 @@ export function parseGlossary(text) {
     return out;
 }
 
+/** 条目列表写回文本(每行「原文 = 译名」),和 parseGlossary 互逆。 */
+export const serializeGlossary = (entries) => (entries || []).map(g => `${g.src} = ${g.dst}`).join('\n');
+
 /** 通用表 + 角色卡表合并:同一原文以角色卡的为准,顺序按首次出现。 */
 export function mergeGlossary(commonText, charText) {
     const map = new Map();
