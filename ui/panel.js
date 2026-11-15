@@ -416,7 +416,8 @@ export function createPanel({ getCtx, onChanged }) {
         root.className = 'px-root';
         root.innerHTML = `<div class="px-backdrop"></div>
             <div class="px-sheet" role="dialog" aria-label="Parallax">
-                <header class="px-head"><h1 class="px-title">Parallax</h1><button class="px-icon-btn" data-action="close" aria-label="关闭">${I.ICON_CLOSE}</button></header>
+                <header class="px-head"><h1 class="px-title">${I.ICON_MOON}<span>Parallax</span></h1><span class="px-parallax">${I.ART_PARALLAX}</span><button class="px-icon-btn" data-action="close" aria-label="关闭">${I.ICON_CLOSE}</button></header>
+                <div class="px-phases">${I.ART_PHASES}</div>
                 <main class="px-main"></main>
                 <nav class="px-tabs"></nav>
                 <div class="px-toast" role="status"></div>

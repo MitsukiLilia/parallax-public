@@ -6,7 +6,7 @@ import { createPanel } from './ui/panel.js';
 import { ICON_MENU, ICON_FLOOR } from './ui/icons.js';
 
 // 自报家门:排查「更新了却在跑旧码」时,控制台比对版本号即知真伪。
-export const PARALLAX_VERSION = '0.1.2';
+export const PARALLAX_VERSION = '0.1.3';
 globalThis.__PARALLAX_VERSION = PARALLAX_VERSION;
 console.info(`[Parallax] v${PARALLAX_VERSION} 已加载`);
 

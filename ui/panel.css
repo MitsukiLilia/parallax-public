@@ -1,27 +1,21 @@
-/* Parallax 面板样式(Shadow DOM 内)。干净朴素的第一版:纯色背景、跟随系统深浅色,无渐变。
-   手机上字号不小于 14px,可点区域不小于 40px 高。 */
+/* Parallax 面板样式(Shadow DOM 内)。主题「双层描图纸」:雾蓝纯色底,每张卡片是一张白纸,
+   后面错开露出一张印着星图的灰粉色纸(同一段文字的两个视角);标题栏画恒星视差示意图,下面一排月相当分隔线。
+   只有日间一套配色,不跟随系统深色。纯色、无渐变、无 emoji。手机上字号不小于 14px,可点区域不小于 40px 高。 */
 
 .px-root {
-    --bg: #F4F4F1; --surface: #FFFFFF; --text: #1F2328; --text2: #4F5862; --line: #D4D8DD;
-    --accent: #2F5F96; --on-accent: #FFFFFF; --accent-soft: #E3ECF6;
-    --ok: #1F7A3E; --warn: #8A5A00; --danger: #B42318; --backdrop: rgba(20, 22, 26, .45);
-    --input-bg: #FFFFFF; --switch-off: #B8BEC6;
-    --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    --bg: #E4F1F8; --surface: #FFFFFF; --text: #2F4A68; --text2: #5C7189; --line: #C7D5E2; --ink: #46607F;
+    --accent: #BF5C76; --on-accent: #FFFFFF; --accent-soft: #F8E4EA;
+    --sheet2: #F9E3E9; --sheet2-line: #D9A9B6;
+    --ok: #2B7757; --warn: #8F611A; --danger: #B02E48; --backdrop: rgba(30, 44, 62, .45);
+    --input-bg: #FFFFFF; --switch-off: #BCC9D8;
+    --sans: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    color-scheme: light;
     /* 视口单位,不用 inset/100%:见 panel.js mount() 的注释 */
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100dvh;
     display: flex; align-items: center; justify-content: center;
     font-family: var(--sans); font-size: 15px; line-height: 1.55; color: var(--text);
     -webkit-text-size-adjust: 100%;
 }
-@media (prefers-color-scheme: dark) {
-    .px-root {
-        --bg: #16181B; --surface: #1F2226; --text: #E7E9EC; --text2: #AEB4BC; --line: #3A3F46;
-        --accent: #8DB6EE; --on-accent: #0E2036; --accent-soft: #24364D;
-        --ok: #7FCB97; --warn: #E2B85C; --danger: #F2958A; --backdrop: rgba(0, 0, 0, .6);
-        --input-bg: #15171A; --switch-off: #4A5059;
-    }
-}
-
 .px-root *, .px-root *::before, .px-root *::after { box-sizing: border-box; }
 :where(.px-root) button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 :where(.px-root) svg { display: block; flex: none; }
@@ -30,7 +24,7 @@
 .px-sheet {
     position: relative; width: min(460px, 100vw); height: min(860px, 100vh); height: min(860px, 100dvh);
     background: var(--bg); border-radius: 14px; overflow: hidden;
-    display: flex; flex-direction: column; border: 1px solid var(--line);
+    display: flex; flex-direction: column; border: 1.5px solid var(--ink);
 }
 @media (max-width: 480px) {
     .px-sheet { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; border: 0; }
@@ -38,21 +32,43 @@
 
 .px-head {
     flex: none; display: flex; align-items: center; justify-content: space-between;
-    padding: 6px 6px 6px 18px; background: var(--surface); border-bottom: 1px solid var(--line);
-    padding-top: calc(6px + env(safe-area-inset-top, 0px));
+    gap: 8px; padding: 8px 6px 0 18px; background: var(--bg);
+    padding-top: calc(8px + env(safe-area-inset-top, 0px));
 }
-.px-title { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: .02em; }
+.px-title { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 24px; font-weight: 700; letter-spacing: .01em; color: var(--ink); }
+.px-title svg { width: 22px; height: 22px; }
+/* 恒星视差示意图:两条视线汇到一颗星。窄屏放不下就让它先缩 */
+.px-parallax { flex: 1; min-width: 0; display: flex; justify-content: center; color: var(--ink); }
+.px-parallax svg { width: 100%; max-width: 150px; height: 34px; }
+/* 月相分隔线 */
+.px-phases { flex: none; display: flex; align-items: center; gap: 10px; padding: 2px 18px 8px; color: var(--ink); background: var(--bg); }
+.px-phases::before, .px-phases::after { content: ""; flex: 1; height: 1.5px; background: var(--ink); }
+.px-phases svg { width: 150px; height: 18px; }
 .px-icon-btn {
-    width: 44px; height: 44px; border: 0; background: transparent; color: var(--text2);
+    flex: none; width: 44px; height: 44px; border: 0; background: transparent; color: var(--ink);
     display: flex; align-items: center; justify-content: center; border-radius: 10px;
 }
 .px-icon-btn svg { width: 22px; height: 22px; }
 
-.px-main { flex: 1; overflow-y: auto; padding: 12px 12px 20px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.px-main { flex: 1; overflow-y: auto; padding: 6px 20px 20px 12px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 
-.px-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
-.px-h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+/* 卡片 = 两张纸。本体透明,::after 是前面那张白纸(四角有对位十字),::before 是后面错开的星图纸。
+   两张都用负 z-index 垫在内容下面,所以卡片要自成一个层叠上下文(isolation)。 */
+.px-card { position: relative; isolation: isolate; padding: 14px 16px; margin-bottom: 20px; }
+.px-card::before, .px-card::after { content: ""; position: absolute; border-radius: 14px; }
+.px-card::before {
+    z-index: -2; inset: 8px -8px -8px 8px; border: 1px solid var(--sheet2-line);
+    background: var(--sheet2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='66'%3E%3Cg fill='%23CF8A9C'%3E%3Ccircle cx='8' cy='60' r='1.1'/%3E%3Ccircle cx='30' cy='57' r='1.4'/%3E%3Ccircle cx='47' cy='62' r='1.4'/%3E%3Ccircle cx='70' cy='58' r='1'/%3E%3Ccircle cx='92' cy='61' r='1.4'/%3E%3Ccircle cx='108' cy='56' r='1.4'/%3E%3Ccircle cx='122' cy='60' r='1'/%3E%3Ccircle cx='126' cy='8' r='1.4'/%3E%3Ccircle cx='122' cy='26' r='1.4'/%3E%3Ccircle cx='127' cy='42' r='1'/%3E%3C/g%3E%3Cg stroke='%23CF8A9C' stroke-width='.8' fill='none'%3E%3Cpath d='M30 57 47 62M92 61l16-5M126 8l-4 18'/%3E%3C/g%3E%3C/svg%3E") right bottom;
+}
+.px-card::after {
+    z-index: -1; inset: 0; border: 1.5px solid var(--ink);
+    --plus: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9'%3E%3Cpath d='M4.5 0v9M0 4.5h9' stroke='%2346607F' stroke-width='1'/%3E%3C/svg%3E");
+    background: var(--plus) 7px 7px no-repeat, var(--plus) calc(100% - 7px) 7px no-repeat,
+        var(--plus) 7px calc(100% - 7px) no-repeat, var(--plus) calc(100% - 7px) calc(100% - 7px) no-repeat, var(--surface);
+}
+.px-h3 { margin: 0 0 8px; font-size: 17px; font-weight: 700; color: var(--ink); }
 .px-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
+.px-row + .px-row { border-top: 1px solid var(--line); }
 .px-label { font-size: 15px; }
 .px-value { color: var(--text2); text-align: right; word-break: break-all; }
 .px-hint { margin: 6px 0; font-size: 14px; color: var(--text2); }
@@ -80,29 +96,29 @@
 .px-btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     min-height: 42px; padding: 8px 14px; border-radius: 10px;
-    border: 1px solid var(--line); background: var(--surface); font-size: 15px;
+    border: 1.5px solid var(--ink); background: var(--surface); color: var(--ink); font-size: 15px; font-weight: 500;
 }
 .px-btn svg { width: 18px; height: 18px; }
 .px-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .px-btn-danger { color: var(--danger); border-color: var(--danger); }
 .px-btn:disabled { opacity: .45; cursor: default; }
+.px-btn:not(:disabled):active { background: var(--accent-soft); }
+.px-btn-primary:not(:disabled):active { background: var(--accent); opacity: .85; }
 
 /* 标签勾选 */
-.px-tags { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-.px-tag {
-    display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 8px 10px;
-    border: 1px solid var(--line); border-radius: 10px; cursor: pointer;
-}
+.px-tags { display: flex; flex-direction: column; margin-top: 4px; }
+.px-tag { display: flex; align-items: flex-start; gap: 12px; min-height: 44px; padding: 10px 2px; cursor: pointer; }
+.px-tag + .px-tag { border-top: 1px solid var(--line); }
 .px-tag input { flex: none; width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--accent); }
 .px-tag-main { display: flex; flex-direction: column; min-width: 0; }
-.px-tag-name { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; }
+.px-tag-name { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; color: var(--ink); }
 .px-tag-pre { font-size: 14px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 表单 */
 .px-field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
 .px-input {
     width: 100%; min-height: 42px; padding: 8px 10px; border-radius: 10px;
-    border: 1px solid var(--line); background: var(--input-bg); color: var(--text);
+    border: 1.5px solid var(--line); background: var(--input-bg); color: var(--text);
     font: inherit; font-size: 15px;
 }
 .px-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
@@ -115,12 +131,12 @@ select.px-input { appearance: auto; }
 
 /* 页签 */
 .px-tabs {
-    flex: none; display: flex; background: var(--surface); border-top: 1px solid var(--line);
+    flex: none; display: flex; background: var(--bg); border-top: 1.5px solid var(--ink);
     padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
 }
 .px-tab {
     flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-    min-height: 52px; border: 0; background: transparent; color: var(--text2); font-size: 14px; border-radius: 10px;
+    min-height: 52px; border: 0; background: transparent; color: var(--ink); font-size: 14px; border-radius: 10px;
 }
 .px-tab svg { width: 22px; height: 22px; }
 .px-tab.active { color: var(--accent); font-weight: 600; }
@@ -128,7 +144,7 @@ select.px-input { appearance: auto; }
 .px-toast {
     position: absolute; left: 50%; bottom: 76px; transform: translateX(-50%);
     max-width: calc(100% - 32px); padding: 10px 16px; border-radius: 10px;
-    background: var(--text); color: var(--bg); font-size: 14px;
+    background: var(--ink); color: #FFFFFF; font-size: 14px;
     opacity: 0; pointer-events: none; transition: opacity .15s;
 }
 .px-toast.show { opacity: 1; }
