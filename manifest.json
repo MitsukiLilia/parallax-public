@@ -4,6 +4,6 @@
     "js": "index.js",
     "css": "style.css",
     "author": "mitsuki & klaude",
-    "version": "0.1.6",
+    "version": "0.1.7",
     "description": "外语正文的显示层翻译:另起一次模型调用把正文译成简体中文,译文只进显示,发给模型的仍是原文。"
 }

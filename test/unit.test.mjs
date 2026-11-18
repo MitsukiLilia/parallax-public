@@ -255,6 +255,25 @@ test('解析:带代码围栏和首尾杂文', () => {
     assert.equal(parseReply('[[1]]\n第一行\n第二行').get(1), '第一行\n第二行');
 });
 
+test('解析:只取 <parallax_output> 标签里面的,段内空行不截断', () => {
+    // 标签外的开场白、结束语都不要;中间段和最后一段里的空行照收
+    const raw = '好的,以下是译文:\n<parallax_output>\n[[1]]\n第一行\n\n第二行\n[[2]]\n末段第一行\n\n末段第二行\n</parallax_output>\n希望对你有帮助。';
+    const m = parseReply(raw);
+    assert.equal(tidyTranslation(m.get(1)), '第一行\n第二行');
+    assert.equal(tidyTranslation(m.get(2)), '末段第一行\n末段第二行');
+    // 没有闭标签(输出被截断):取到末尾
+    const cut = parseReply('<parallax_output>\n[[1]]\n一\n[[2]]\n二的前半');
+    assert.equal(cut.get(1), '一');
+    assert.equal(cut.get(2), '二的前半');
+    assert.equal(cut.has(3), false);
+    // 标签大小写不敏感;标签里再套代码围栏也认
+    assert.equal(parseReply('<PARALLAX_OUTPUT>\n```\n[[1]]\n一\n```\n</PARALLAX_OUTPUT>').get(1), '一');
+    // 模型没写标签:中间段的空行照收,只有最后一段按空行切掉结束语
+    const bare = parseReply('[[1]]\n第一行\n\n第二行\n[[2]]\n末段\n\n希望对你有帮助。');
+    assert.equal(tidyTranslation(bare.get(1)), '第一行\n第二行');
+    assert.equal(bare.get(2), '末段');
+});
+
 test('解析:缺号、乱序、编号后同一行有字', () => {
     const miss = parseReply('[[1]]\n一\n[[3]]\n三');
     assert.equal(miss.has(2), false);

@@ -52,13 +52,32 @@ export const pickGlossary = (entries, text) => (entries || []).filter(g => Strin
 
 const MARK_RE = /^\s*(?:\[\[\s*(\d+)\s*\]\]|【\s*(\d+)\s*】|\[\s*(\d+)\s*\])\s*(.*)$/;
 
+// 提示词要求把全部译文包在这对标签里。名字取得特别:走酒馆当前连接时回复会先过用户的正则脚本,常见的标签名可能被哪套预设的正则处理掉。
+export const OUT_TAG = 'parallax_output';
+const OUT_OPEN_RE = new RegExp(`<${OUT_TAG}>`, 'i');
+const OUT_CLOSE_RE = new RegExp(`</${OUT_TAG}>`, 'i');
+
+/** 取标签里面的内容。没有闭标签(多半是输出被截断)就取到末尾;没有开标签返回 null。 */
+function insideOutTag(raw) {
+    const open = raw.match(OUT_OPEN_RE);
+    if (!open) return null;
+    const rest = raw.slice(open.index + open[0].length);
+    const close = rest.match(OUT_CLOSE_RE);
+    return close ? rest.slice(0, close.index) : rest;
+}
+
 /**
- * 宽容解析:剥代码围栏行与首尾杂文;[[n]]、【n】、[n] 独占一行都认,编号后同一行有文字也认。
- * 每段的译文到第一个空行为止(原文段落本身不含空行,空行之后的只会是杂文)。
+ * 宽容解析:优先只看 <parallax_output> 标签里面的内容(标签外的开场白、结束语直接不要);
+ * 再剥代码围栏行;[[n]]、【n】、[n] 独占一行都认,编号后同一行有文字也认。
+ * 每段的译文取到下一个编号为止,段内的空行照收(之后由 tidyTranslation 压掉)。
+ * 只有一种情况还按空行切:模型没写标签时的最后一段,空行之后的当作结束语。
  * 返回 Map<n, text>;同一编号出现多次取第一个非空的。
  */
 export function parseReply(raw) {
-    let lines = String(raw ?? '').replace(/\r\n/g, '\n').split('\n');
+    const whole = String(raw ?? '').replace(/\r\n/g, '\n');
+    const inner = insideOutTag(whole);
+    const wrapped = inner !== null;
+    let lines = (wrapped ? inner : whole).split('\n');
     const fenceAt = lines.map((l, i) => (/^\s*```/.test(l) ? i : -1)).filter(i => i >= 0);
     if (fenceAt.length >= 2) {
         // 有成对围栏:只要围栏里面的,围栏外的开场白、结束语都是杂文
@@ -70,9 +89,10 @@ export function parseReply(raw) {
     }
     const out = new Map();
     let cur = null;
-    const flush = () => {
+    const flush = (isLast) => {
         if (!cur) return;
-        const body = cur.lines.join('\n').trim().split(/\n[ \t　]*\n/)[0].trim();
+        let body = cur.lines.join('\n').trim();
+        if (isLast && !wrapped) body = body.split(/\n[ \t　]*\n/)[0].trim();
         if (body && !out.get(cur.n)) out.set(cur.n, body);
         else if (!out.has(cur.n)) out.set(cur.n, body);
         cur = null;
@@ -80,13 +100,13 @@ export function parseReply(raw) {
     for (const line of lines) {
         const m = line.match(MARK_RE);
         if (m) {
-            flush();
+            flush(false);
             cur = { n: Number(m[1] ?? m[2] ?? m[3]), lines: m[4] ? [m[4]] : [] };
             continue;
         }
         if (cur) cur.lines.push(line);
     }
-    flush();
+    flush(true);
     return out;
 }
 

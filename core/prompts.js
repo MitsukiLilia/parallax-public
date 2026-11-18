@@ -43,7 +43,8 @@ export const PLACEHOLDER_NOTE = '形如 ⟦1⟧ 的记号原样保留在译文�
 const FORMAT_RULES = `格式约定：
 - 用户消息里是带编号的段落，每段以独占一行的 [[n]] 开头，下面是这一段的原文。
 - 按同样的 [[n]] 编号逐段交回译文：编号独占一行，下一行起是这一段的译文。
-- 一个编号对应一段，不合并、不拆分、不漏段，不加任何说明、注释或标题。`;
+- 一个编号对应一段，不合并、不拆分、不漏段，不加任何说明、注释或标题。
+- 全部译文放在一对 <parallax_output> 和 </parallax_output> 标签之间：先写 <parallax_output>，再写各段译文，最后写 </parallax_output>。标签外不写任何内容。`;
 
 /** 生效的译法:没给(空)就用日语那份。 */
 export const effectivePrompt = (custom) => (String(custom ?? '').trim() ? String(custom).trim() : DEFAULT_PROMPT);
