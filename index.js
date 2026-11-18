@@ -6,7 +6,7 @@ import { createPanel } from './ui/panel.js';
 import { ICON_MENU, ICON_FLOOR } from './ui/icons.js';
 
 // 自报家门:排查「更新了却在跑旧码」时,控制台比对版本号即知真伪。
-export const PARALLAX_VERSION = '0.1.5';
+export const PARALLAX_VERSION = '0.1.6';
 globalThis.__PARALLAX_VERSION = PARALLAX_VERSION;
 console.info(`[Parallax] v${PARALLAX_VERSION} 已加载`);
 
@@ -72,10 +72,35 @@ function renderedIds() {
 /** 重画一楼:正文按 display_text ?? mes 重画(酒馆的规则),再刷新按钮状态。返回是否真的动了页面(门闸据此决定要不要通知别的扩展)。 */
 function redraw(ctx, id) {
     const m = ctx.chat?.[id];
-    const drawn = !!(m && mesEl(id));
+    const el = m && mesEl(id);
+    // 这一楼正开着编辑框:不能重画。重画会把编辑框换掉,之后点「完成」酒馆找不到编辑框,
+    // 会把页面上显示的文字(译文)当成正文写回去。记下来,编辑结束后再画。
+    if (el && el.querySelector('.edit_textarea')) {
+        pendingAfterEdit.add(id);
+        updateButton(ctx, id);
+        return false;
+    }
+    const drawn = !!el;
     if (drawn) ctx.updateMessageBlock?.(id, m);
     updateButton(ctx, id);
     return drawn;
+}
+
+// 编辑期间被推迟的重画:编辑结束(完成或取消)后补上。完成时酒馆自己会发 MESSAGE_UPDATED,这里主要管取消。
+const pendingAfterEdit = new Set();
+function flushAfterEdit() {
+    if (!pendingAfterEdit.size) return;
+    const ctx = getCtx();
+    for (const id of [...pendingAfterEdit]) {
+        const el = mesEl(id);
+        if (el?.querySelector('.edit_textarea')) continue; // 还在编辑
+        pendingAfterEdit.delete(id);
+        if (el && ctx.chat?.[id]) gate.refreshFloor(ctx, id, { force: true });
+    }
+}
+function onEditEndClick(e) {
+    if (!pendingAfterEdit.size || !(e.target instanceof Element)) return;
+    if (e.target.closest('.mes_edit_cancel, .mes_edit_done')) setTimeout(flushAfterEdit, 100);
 }
 
 // 只刷新进行态变了的楼:不遍历整本聊天
@@ -112,7 +137,7 @@ function bind(ctx) {
     on('MESSAGE_EDITED', gate.onMessageEdited);
     on('MESSAGE_UPDATED', (id) => { gate.onMessageUpdated(id); updateButton(getCtx(), Number(id)); });
     on('MESSAGE_DELETED', gate.onMessageDeleted);
-    on('CHAT_CHANGED', () => { installButtons(); gate.onChatChanged(); refreshAllButtons(); });
+    on('CHAT_CHANGED', () => { pendingAfterEdit.clear(); installButtons(); gate.onChatChanged(); refreshAllButtons(); });
     on('MORE_MESSAGES_LOADED', () => { installButtons(); gate.rebuildRendered(); refreshAllButtons(); });
 }
 
@@ -129,6 +154,7 @@ function main() {
     bind(ctx);
     subscribe(onStatus);
     document.addEventListener('click', onFloorButton, true);
+    document.addEventListener('click', onEditEndClick, true);
     installButtons();
 
     waitForExtensionsMenu((menu) => {

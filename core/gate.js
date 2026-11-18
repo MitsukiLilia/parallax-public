@@ -44,9 +44,25 @@ function tagsForFloor(ctx, m) {
     return store.hasTranslation(m) ? store.tagsFor(m, presetTags(ctx)) : presetTags(ctx);
 }
 
+/**
+ * 排一次保存。优先交给酒馆自己的防抖保存(saveMetadataDebounced,存的是整本聊天):切聊天时酒馆会撤掉它。
+ * 自己定时直接调 saveChat 有个空档——切聊天途中「聊天已清空、文件名已指向新聊天、内容还没读回来」,
+ * 定时器落在这里会把空聊天写进新聊天的文件。没有防抖保存可用时才自己定时,到点先核对还是不是排队时那个聊天。
+ */
 export function scheduleSave() {
+    const ctx = ctxNow();
+    if (typeof ctx.saveMetadataDebounced === 'function') {
+        try { ctx.saveMetadataDebounced(); } catch (err) { console.warn('[Parallax] 保存排队失败', err); }
+        return;
+    }
+    const chatId = chatIdOf(ctx);
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { saveTimer = null; try { ctxNow().saveChat?.(); } catch (err) { console.warn('[Parallax] 保存失败', err); } }, config.saveDelay);
+    saveTimer = setTimeout(() => {
+        saveTimer = null;
+        const now = ctxNow();
+        if (chatIdOf(now) !== chatId || !now.chat?.length) return; // 聊天换了或正空着:不存
+        try { now.saveChat?.(); } catch (err) { console.warn('[Parallax] 保存失败', err); }
+    }, config.saveDelay);
 }
 
 // 正在补发「这一楼刚被重画」通知的楼:mesId → Promise。见 notifyRedrawn。

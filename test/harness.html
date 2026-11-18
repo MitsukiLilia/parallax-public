@@ -114,6 +114,7 @@ function makeCtx() {
         getCurrentChatId: () => world.chatId,
         getPresetManager: () => ({ getSelectedPresetName: () => world.preset }),
         saveSettingsDebounced() {}, saveChat: async () => { counters.saves++; },
+        ...(world.useMetaSave ? { saveMetadataDebounced: () => { counters.metaSaves = (counters.metaSaves || 0) + 1; } } : {}),
         updateMessageBlock, generateRaw, ConnectionManagerRequestService: undefined,
     };
 }
@@ -213,7 +214,7 @@ async function resetWorld(opts = {}) {
     delete extensionSettings.parallax;
     S({ presets: { '测试预设': { tags: ['content'] } }, ...opts });
     Object.assign(fx, { calls: [], delay: 0, drop: null, fail: null, gate: null });
-    counters.saves = 0; counters.blocks = 0;
+    counters.saves = 0; counters.blocks = 0; counters.metaSaves = 0; world.useMetaSave = false;
     $('chat').innerHTML = '';
     await eventSource.emit(eventTypes.CHAT_CHANGED, world.chatId);
 }
@@ -583,6 +584,54 @@ T('H10 一键补翻与导出', async () => {
     check('H10.13 关掉小标题后没有「第N章」', blobText && !/第\d+章/.test(blobText), blobText);
     URL.createObjectURL = origCreate; HTMLAnchorElement.prototype.click = origClick;
     p.close();
+});
+
+T('H90 编辑框开着时不重画', async () => {
+    await resetWorld();
+    const id = await generate(SAMPLE);
+    const m = world.chat[id];
+    const zh = m.extra.display_text;
+    floorBtn(id).click();                                   // 切到原文
+    check('H90.0 已切到原文', shownText(id) !== zh);
+    const el = document.querySelector(`#chat .mes[mesid="${id}"]`);
+    const text = el.querySelector('.mes_text');
+    text.innerHTML = '<textarea class="edit_textarea"></textarea>'; // 酒馆打开编辑框
+    const blocks = counters.blocks;
+    floorBtn(id).click();                                   // 编辑期间切回译文:数据改,页面不动
+    check('H90.1 编辑框还在', !!text.querySelector('.edit_textarea'));
+    eq('H90.2 编辑期间没有重画', counters.blocks, blocks);
+    check('H90.3 译文数据已就位', m.extra.display_text === zh);
+    const cancel = document.createElement('div'); cancel.className = 'mes_edit_cancel'; el.appendChild(cancel);
+    text.innerHTML = esc(m.mes);                            // 酒馆取消编辑:用原文画回去
+    cancel.click();
+    await tick(200);
+    check('H90.4 取消编辑后补画成译文', shownText(id) === zh, shownText(id));
+    cancel.remove();
+    await gate.whenIdle();
+});
+
+T('H91 保存:走酒馆的防抖保存;自己定时的那条路切聊天后不存', async () => {
+    await resetWorld();
+    const id = await generate(SAMPLE);
+    await tick(20);
+    world.useMetaSave = true; counters.saves = 0; counters.metaSaves = 0;
+    floorBtn(id).click();
+    await tick(20);
+    check('H91.1 有防抖保存就用它', counters.metaSaves >= 1 && counters.saves === 0, JSON.stringify(counters));
+    world.useMetaSave = false; counters.saves = 0;
+    floorBtn(id).click();
+    const keep = world.chatId; world.chatId = 'other-chat';  // 定时器到点之前聊天换了
+    await tick(20);
+    eq('H91.2 聊天换了:不存', counters.saves, 0);
+    world.chatId = keep;
+    floorBtn(id).click();
+    const chat = world.chat; world.chat = [];               // 定时器到点时聊天正空着
+    await tick(20);
+    eq('H91.3 聊天空着:不存', counters.saves, 0);
+    world.chat = chat;
+    floorBtn(id).click();
+    await tick(20);
+    check('H91.4 正常情况照常保存', counters.saves >= 1);
 });
 
 async function runAll() {
