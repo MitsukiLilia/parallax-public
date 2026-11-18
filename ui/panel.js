@@ -4,7 +4,7 @@
 import { getSettings, saveSettings, currentPresetName, presetTags, currentCharacter } from '../core/settings.js';
 import { status, subscribe } from '../core/bus.js';
 import { fetchCustomApiModels } from '../core/llm.js';
-import { SOURCE_LANGS } from '../core/prompts.js';
+import { SOURCE_LANGS, glossaryHintFor } from '../core/prompts.js';
 import { scanPairedTags } from '../core/segment.js';
 import { buildExport } from '../core/export.js';
 import { parseGlossary, serializeGlossary } from '../core/translate.js';
@@ -189,7 +189,7 @@ export function createPanel({ getCtx, onChanged }) {
         const ch = currentCharacter(c);
         return `<section class="px-card">
             <p class="px-hint">表里有的照表翻译,表里没有的由模型自己判断。</p>
-            <p class="px-hint">片假名、平假名的人名最需要填,例如「カガミ → 镜」。每次只带上本批文字里出现过的条目。</p>
+            <p class="px-hint">${esc(glossaryHintFor(s.sourceLang))}每次只带上本批文字里出现过的条目。</p>
         </section>
         <section class="px-card">
             <h3 class="px-h3">通用</h3>
@@ -412,7 +412,7 @@ export function createPanel({ getCtx, onChanged }) {
         const key = t.dataset.set;
         if (key === 'batchChars') {
             let v = Math.floor(Number(t.value));
-            if (!Number.isFinite(v)) v = 20000;
+            if (!Number.isFinite(v)) v = 80000;
             v = Math.min(100000, Math.max(200, v));
             s.batchChars = v; t.value = v;
         } else if (key === 'sourceLang') {

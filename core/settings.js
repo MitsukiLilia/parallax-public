@@ -7,8 +7,8 @@ export const SETTINGS_KEY = 'parallax';
 export const DEFAULT_SETTINGS = {
     enabled: true,
     auto: true,
-    v: 2,                    // 设置版本:升级时迁移旧默认值用
-    batchChars: 20000,
+    v: 3,                    // 设置版本:升级时迁移旧默认值用
+    batchChars: 80000,
     sourceLang: 'ja',        // 原文语言(译法内置,按语言取)
     exportTitles: true,      // 导出时每楼加「第N章」小标题
     presets: {},             // { <预设名>: { tags: [...], exportTags: [...] } }
@@ -24,7 +24,9 @@ export function getSettings(ctx) {
     let cur = store[SETTINGS_KEY];
     if (!isObj(cur)) cur = store[SETTINGS_KEY] = {};
     // 0.1.2 之前的默认每批 6000:没改过的跟到新默认值
-    if (Object.keys(cur).length && cur.v === undefined) { if (Number(cur.batchChars) === 6000) delete cur.batchChars; cur.v = DEFAULT_SETTINGS.v; }
+    if (Object.keys(cur).length && cur.v === undefined) { if (Number(cur.batchChars) === 6000) delete cur.batchChars; cur.v = 2; }
+    // 0.1.5 之前的默认每批 20000:没改过的跟到新默认值
+    if (cur.v === 2) { if (Number(cur.batchChars) === 20000) delete cur.batchChars; cur.v = 3; }
     for (const k of Object.keys(DEFAULT_SETTINGS)) {
         if (cur[k] === undefined) {
             const d = DEFAULT_SETTINGS[k];

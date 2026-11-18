@@ -9,7 +9,10 @@ export const MAX_REQUESTS = 8;
 const KANA_RE = /[ぁ-ゖゝ-ゟァ-ヺヽ-ヿㇰ-ㇿｦ-ｯｱ-ﾝ]/;
 export const hasKana = (s) => KANA_RE.test(String(s ?? ''));
 // 「译文里还留着原文的文字」的判据,按原文语言各一条。
-const RESIDUE = { ja: hasKana };
+// 英语:人名、缩写会合法留在译文里,所以不看有没有拉丁字母,看有没有连着 4 个以上的英文单词。
+const EN_RUN_RE = /(?:[A-Za-z][A-Za-z'’-]*[\s,.;:!?"“”‘’—–-]+){3}[A-Za-z]/;
+export const hasEnglishRun = (s) => EN_RUN_RE.test(String(s ?? ''));
+const RESIDUE = { ja: hasKana, en: hasEnglishRun };
 const hasResidue = (lang, s) => (RESIDUE[lang] || RESIDUE.ja)(s);
 
 // ── 译名表 ──
@@ -98,7 +101,7 @@ function placeholderOk(src, out) {
 
 /**
  * 判定一段有没有翻成。返回 null = 翻成了(或短文本原样返回,接受为不用翻);否则返回原因。
- * 原因:missing 缺号 / empty 空 / placeholder 占位符对不上 / same 原样返回且原文较长 / kana 残留原文文字(日语 = 假名)
+ * 原因:missing 缺号 / empty 空 / placeholder 占位符对不上 / same 原样返回且原文较长 / kana 残留原文文字(日语 = 假名,英语 = 连着 4 个以上英文单词)
  */
 export function judge(masked, text, lang = 'ja') {
     if (text === undefined || text === null) return 'missing';
@@ -119,7 +122,7 @@ export function judge(masked, text, lang = 'ja') {
 
 /** 按原文字符数上限在段落边界切批;单段超长就自成一批。 */
 export function chunkUnits(units, limit) {
-    const cap = Math.max(1, Number(limit) || 20000);
+    const cap = Math.max(1, Number(limit) || 80000);
     const out = [];
     let cur = [], size = 0;
     for (const u of units) {
@@ -147,7 +150,7 @@ const errText = (err) => String(err?.message || err?.error?.message || err);
  * 返回 { done: Map<fp, 已还原的译文>, failed: Map<fp, 原因>, requests, error }
  * 规则:批内一次回来后只补没翻成的;一次请求毫无新增就把剩余对半拆开(只剩一段则再试一次后放弃);总请求数硬上限 maxRequests。
  */
-export async function translateUnits(units, { call, prompt = '', lang = 'ja', glossary = [], batchChars = 20000, maxRequests = MAX_REQUESTS, onProgress } = {}) {
+export async function translateUnits(units, { call, prompt = '', lang = 'ja', glossary = [], batchChars = 80000, maxRequests = MAX_REQUESTS, onProgress } = {}) {
     const all = dedupeUnits(units || []);
     const done = new Map();
     const failed = new Map();

@@ -8,7 +8,7 @@ import {
     findRegions, segment, assemble, maskInline, unmask, paraFingerprint, scanPairedTags, hasStructuralTag,
 } from '../core/segment.js';
 import {
-    parseReply, judge, parseGlossary, mergeGlossary, pickGlossary, translateUnits, chunkUnits, tidyTranslation, hasKana,
+    parseReply, judge, parseGlossary, mergeGlossary, pickGlossary, translateUnits, chunkUnits, tidyTranslation, hasKana, hasEnglishRun,
 } from '../core/translate.js';
 import { buildSystemPrompt, buildUserMessage, DEFAULT_PROMPT, GLOSSARY_HEAD, PLACEHOLDER_NOTE } from '../core/prompts.js';
 import { writeResults, renderDisplay, reconcile, getRecord, missingUnits, srcFingerprint, clearChat, setOff } from '../core/store.js';
@@ -287,6 +287,19 @@ test('判定:五种没翻成,加短文本原样返回被接受', () => {
     assert.equal(hasKana('角色甲・角色乙ー'), false);
 });
 
+test('判定:英语原文看「连着 4 个以上英文单词」,人名和缩写留着不算', () => {
+    const src = 'She opened the window and breathed in the damp night air.';
+    assert.equal(judge(src, src, 'en'), 'same');
+    assert.equal(judge(src, '她打开窗,吸了一口 the damp night air.', 'en'), 'kana');
+    assert.equal(judge(src, '她打开窗,吸了一口潮湿的夜气。', 'en'), null);
+    // 人名、缩写、两三个词的专名留着不算没翻
+    assert.equal(judge(src, 'Evelyn 打开窗,用 GPS 查了 New York 的方向。', 'en'), null);
+    assert.equal(hasEnglishRun("Don't you dare, Evelyn"), true);
+    assert.equal(hasEnglishRun('角色甲 and 角色乙'), false);
+    // 假名判据只管日语:英语线不查假名,日语线不查英文
+    assert.equal(judge('彼は英語で言った。', '他用英语说:Leave me alone right now.', 'ja'), null);
+});
+
 // ── 译名表 ──
 
 test('译名表:四种分隔符', () => {
@@ -495,4 +508,19 @@ test('导出:只收 AI 楼,取指定标签,译文优先,没翻的标出来', () 
 test('导出:没有标签的楼(开场白之类)整楼导出', () => {
     const m = { mes: 'ようこそ。\n\n<b>始まり</b>だ。', extra: {}, is_user: false };
     assert.deepEqual(floorText(m, ['content'], ['content']), { text: 'ようこそ。\n\n始まりだ。', state: 'none' });
+});
+
+// ── 设置迁移 ──
+
+test('设置:旧默认每批 20000 跟到新默认 80000,自己改过的数值不动', async () => {
+    const { getSettings, DEFAULT_SETTINGS } = await import('../core/settings.js');
+    assert.equal(DEFAULT_SETTINGS.batchChars, 80000);
+    assert.equal(getSettings({ extensionSettings: {} }).batchChars, 80000);
+    assert.equal(getSettings({ extensionSettings: { parallax: { v: 2, batchChars: 20000 } } }).batchChars, 80000);
+    assert.equal(getSettings({ extensionSettings: { parallax: { v: 2, batchChars: 12000 } } }).batchChars, 12000);
+    assert.equal(getSettings({ extensionSettings: { parallax: { batchChars: 6000 } } }).batchChars, 80000);
+    // 迁移只跑一次:升到 v3 之后再手动填 20000 会留住
+    const s = getSettings({ extensionSettings: { parallax: { v: 3, batchChars: 20000 } } });
+    assert.equal(s.batchChars, 20000);
+    assert.equal(s.v, 3);
 });
